@@ -75,6 +75,23 @@ $stmt->execute([$lowStockThreshold]);
 $lowStockItems = $stmt->fetchAll();
 $lowStockCount = count($lowStockItems);
 
+// Recommend slow-moving items with enough stock so cashiers can suggest them.
+$stmt = $pdo->query("SELECT mi.id, mi.name, mi.quantity,
+                    COALESCE(SUM(CASE
+                        WHEN o.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+                        AND o.status IN ('processing', 'completed')
+                        THEN oi.quantity
+                        ELSE 0
+                    END), 0) as sold_30_days
+                    FROM menu_items mi
+                    LEFT JOIN order_items oi ON oi.menu_item_id = mi.id
+                    LEFT JOIN orders o ON o.id = oi.order_id
+                    WHERE mi.is_available = 1 AND mi.quantity > {$lowStockThreshold}
+                    GROUP BY mi.id, mi.name, mi.quantity
+                    ORDER BY sold_30_days ASC, mi.quantity DESC, mi.name ASC
+                    LIMIT 3");
+$recommendedItems = $stmt->fetchAll();
+
 // Initialize cart if not exists
 if (!isset($_SESSION['cart'])) {
     $_SESSION['cart'] = [];
@@ -316,6 +333,22 @@ $totalAmount = $subtotal + $taxAmount;
                     <?php endif; ?>
                 </form>
 
+                <?php if (!empty($recommendedItems)): ?>
+                <div class="hidden xl:flex items-center gap-2 max-w-[420px] overflow-hidden mr-4">
+                    <div class="shrink-0 w-10 h-10 rounded-xl bg-brand-light text-brand-black border border-brand flex items-center justify-center" title="Cashier recommendations">
+                        <i class="fa-solid fa-lightbulb"></i>
+                    </div>
+                    <div class="flex items-center gap-2 overflow-hidden">
+                        <?php foreach ($recommendedItems as $recommendedItem): ?>
+                        <button type="button" onclick="addToCart(<?php echo (int)$recommendedItem['id']; ?>)" class="shrink-0 max-w-[130px] bg-white h-10 rounded-xl px-3 border border-gray-200 shadow-sm hover:border-brand hover:bg-brand-light transition-colors text-left" title="Recommend <?php echo htmlspecialchars($recommendedItem['name']); ?>">
+                            <span class="block text-xs font-bold text-brand-black truncate"><?php echo htmlspecialchars($recommendedItem['name']); ?></span>
+                            <span class="block text-[10px] text-gray-500 truncate"><?php echo (int)$recommendedItem['quantity']; ?> stock &middot; <?php echo (int)$recommendedItem['sold_30_days']; ?> sold</span>
+                        </button>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+                <?php endif; ?>
+
                 <button onclick="showStockNotificationModal()" class="relative w-10 h-10 bg-white rounded-xl shadow-sm border <?php echo $lowStockCount > 0 ? 'border-red-200 text-red-600' : 'border-gray-200 text-gray-500'; ?> flex items-center justify-center hover:text-brand-black transition-colors" title="Stock notifications">
                     <i class="fa-solid fa-bell"></i>
                     <?php if ($lowStockCount > 0): ?>
@@ -421,9 +454,6 @@ $totalAmount = $subtotal + $taxAmount;
                                 Take Out
                             </button>
                         </div>
-                        <button onclick="showTableSelectModal()" class="w-8 h-8 rounded-full bg-gray-100 text-brand-black hover:bg-brand hover:text-brand-black transition-colors flex items-center justify-center border border-transparent hover:border-brand-black">
-                            <i class="fa-solid fa-pen text-sm"></i>
-                        </button>
                     </div>
                 </div>
             </div>
@@ -727,38 +757,71 @@ $totalAmount = $subtotal + $taxAmount;
 
     <!-- Amount Received Modal -->
     <div id="amountReceivedModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
-        <div class="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-200">
+        <div class="relative bg-white rounded-2xl p-6 max-w-2xl w-full mx-4 shadow-2xl border border-gray-200">
+            <button type="button" onclick="hideAmountReceivedModal()" class="absolute top-4 right-4 w-9 h-9 rounded-full bg-gray-100 text-gray-500 hover:text-brand-black hover:bg-gray-200 transition-colors">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
             <div class="flex items-center justify-center w-16 h-16 bg-brand-light rounded-full mx-auto mb-4">
                 <i class="fa-solid fa-money-bill-transfer text-brand-dark text-2xl"></i>
             </div>
             <h3 class="text-xl font-serif font-bold text-brand-black text-center mb-2">Amount Given</h3>
             <p class="text-gray-600 text-center mb-6">Enter the amount received from the customer</p>
 
-            <div class="space-y-4">
-                <div>
-                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Customer Amount</label>
-                    <input id="amountReceivedInput" type="number" min="0" step="0.01" placeholder="0.00" oninput="updateAmountReceived()" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+            <div class="grid grid-cols-1 md:grid-cols-[1fr_220px] gap-5 items-start">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Customer Amount</label>
+                        <input id="amountReceivedInput" type="number" min="0" step="0.01" placeholder="0.00" oninput="updateAmountReceived()" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                    </div>
+
+                    <div class="bg-gray-50 rounded-xl p-4 border border-gray-200 space-y-2">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600">Total Due</span>
+                            <span id="amountModalTotal" class="font-bold text-brand-black"><?php echo formatCurrency($totalAmount); ?></span>
+                        </div>
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-600">Change</span>
+                            <span id="amountModalChange" class="font-bold text-brand-black"><?php echo formatCurrency(0); ?></span>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-3">
+                        <button onclick="clearAmountReceived()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">
+                            Clear
+                        </button>
+                        <button onclick="confirmAmountReceived()" class="flex-1 bg-brand-black text-brand py-3 rounded-xl font-bold hover:bg-gray-800 transition-colors">
+                            Done
+                        </button>
+                    </div>
                 </div>
 
-                <div class="bg-gray-50 rounded-xl p-4 border border-gray-200 space-y-2">
-                    <div class="flex justify-between text-sm">
-                        <span class="text-gray-600">Total Due</span>
-                        <span id="amountModalTotal" class="font-bold text-brand-black"><?php echo formatCurrency($totalAmount); ?></span>
+                <div class="space-y-3">
+                    <div class="grid grid-cols-3 gap-2">
+                        <button type="button" onclick="setAmountReceivedPreset(1000)" class="bg-brand-light border border-brand rounded-xl py-3 text-sm font-bold text-brand-black hover:bg-brand transition-colors">1000</button>
+                        <button type="button" onclick="setAmountReceivedPreset(500)" class="bg-brand-light border border-brand rounded-xl py-3 text-sm font-bold text-brand-black hover:bg-brand transition-colors">500</button>
+                        <button type="button" onclick="setAmountReceivedPreset(200)" class="bg-brand-light border border-brand rounded-xl py-3 text-sm font-bold text-brand-black hover:bg-brand transition-colors">200</button>
+                        <button type="button" onclick="setAmountReceivedPreset(100)" class="bg-brand-light border border-brand rounded-xl py-3 text-sm font-bold text-brand-black hover:bg-brand transition-colors">100</button>
+                        <button type="button" onclick="setAmountReceivedPreset(50)" class="bg-brand-light border border-brand rounded-xl py-3 text-sm font-bold text-brand-black hover:bg-brand transition-colors">50</button>
+                        <button type="button" onclick="setAmountReceivedPreset(20)" class="bg-brand-light border border-brand rounded-xl py-3 text-sm font-bold text-brand-black hover:bg-brand transition-colors">20</button>
                     </div>
-                    <div class="flex justify-between text-sm">
-                        <span class="text-gray-600">Change</span>
-                        <span id="amountModalChange" class="font-bold text-brand-black"><?php echo formatCurrency(0); ?></span>
+
+                    <div class="grid grid-cols-3 gap-2">
+                        <button type="button" onclick="pressAmountKey('7')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">7</button>
+                        <button type="button" onclick="pressAmountKey('8')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">8</button>
+                        <button type="button" onclick="pressAmountKey('9')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">9</button>
+                        <button type="button" onclick="pressAmountKey('4')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">4</button>
+                        <button type="button" onclick="pressAmountKey('5')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">5</button>
+                        <button type="button" onclick="pressAmountKey('6')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">6</button>
+                        <button type="button" onclick="pressAmountKey('1')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">1</button>
+                        <button type="button" onclick="pressAmountKey('2')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">2</button>
+                        <button type="button" onclick="pressAmountKey('3')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">3</button>
+                        <button type="button" onclick="backspaceAmountReceived()" class="bg-gray-100 border border-gray-300 rounded-xl py-4 text-lg font-bold text-gray-700 hover:bg-gray-200 transition-colors">
+                            <i class="fa-solid fa-delete-left"></i>
+                        </button>
+                        <button type="button" onclick="pressAmountKey('0')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">0</button>
+                        <button type="button" onclick="pressAmountKey('.')" class="bg-gray-100 border border-gray-300 rounded-xl py-4 text-lg font-bold text-gray-700 hover:bg-gray-200 transition-colors">.</button>
                     </div>
                 </div>
-            </div>
-
-            <div class="flex gap-3 mt-6">
-                <button onclick="clearAmountReceived()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">
-                    Clear
-                </button>
-                <button onclick="hideAmountReceivedModal()" class="flex-1 bg-brand-black text-brand py-3 rounded-xl font-bold hover:bg-gray-800 transition-colors">
-                    Done
-                </button>
             </div>
         </div>
     </div>
@@ -1120,8 +1183,8 @@ $totalAmount = $subtotal + $taxAmount;
             }
 
             const totalDue = getDiscountTotals().totalAmount;
-            if (amountReceived > 0 && amountReceived < totalDue) {
-                showNotification('Amount given is less than total due', 'warning');
+            if (amountReceived < totalDue) {
+                showNotification('Amount given must be equal to or greater than total due', 'warning');
                 showAmountReceivedModal();
                 return;
             }
@@ -1235,7 +1298,7 @@ $totalAmount = $subtotal + $taxAmount;
         function showNotification(message, type = 'success') {
             // Create notification element
             const notification = document.createElement('div');
-            notification.className = `fixed top-4 right-4 z-50 p-4 rounded-xl shadow-lg border transform transition-all duration-300 translate-x-full`;
+            notification.className = `fixed top-4 left-1/2 z-50 w-[min(calc(100%-2rem),28rem)] p-4 rounded-xl shadow-lg border transform -translate-x-1/2 -translate-y-full opacity-0 transition-all duration-300`;
             
             // Set colors based on type
             if (type === 'error') {
@@ -1257,13 +1320,14 @@ $totalAmount = $subtotal + $taxAmount;
             
             // Slide in
             setTimeout(() => {
-                notification.classList.remove('translate-x-full');
-                notification.classList.add('translate-x-0');
+                notification.classList.remove('-translate-y-full', 'opacity-0');
+                notification.classList.add('translate-y-0', 'opacity-100');
             }, 100);
             
             // Auto remove after 3 seconds
             setTimeout(() => {
-                notification.classList.add('translate-x-full');
+                notification.classList.remove('translate-y-0', 'opacity-100');
+                notification.classList.add('-translate-y-full', 'opacity-0');
                 setTimeout(() => {
                     if (notification.parentNode) {
                         notification.parentNode.removeChild(notification);
@@ -1360,10 +1424,55 @@ $totalAmount = $subtotal + $taxAmount;
             document.getElementById('amountReceivedModal').classList.add('hidden');
         }
 
+        function confirmAmountReceived() {
+            const totalDue = getDiscountTotals().totalAmount;
+
+            if (amountReceived < totalDue) {
+                showNotification('Amount given must be equal to or greater than total due', 'warning');
+                document.getElementById('amountReceivedInput').focus();
+                return;
+            }
+
+            hideAmountReceivedModal();
+        }
+
         function updateAmountReceived() {
             const input = document.getElementById('amountReceivedInput');
             amountReceived = Math.max(0, Number(input.value) || 0);
             updateAmountReceivedDisplay();
+        }
+
+        function pressAmountKey(key) {
+            const input = document.getElementById('amountReceivedInput');
+            let value = input.value;
+
+            if (key === '.') {
+                if (value.includes('.')) return;
+                value = value === '' ? '0.' : value + '.';
+            } else {
+                const decimalIndex = value.indexOf('.');
+                if (decimalIndex !== -1 && value.length - decimalIndex > 2) return;
+                value = value === '0' ? key : value + key;
+            }
+
+            input.value = value;
+            updateAmountReceived();
+            input.focus();
+        }
+
+        function setAmountReceivedPreset(amount) {
+            const input = document.getElementById('amountReceivedInput');
+            amountReceived = Math.max(0, amountReceived + (Number(amount) || 0));
+            input.value = amountReceived.toFixed(2);
+            updateAmountReceivedDisplay();
+            input.focus();
+        }
+
+        function backspaceAmountReceived() {
+            const input = document.getElementById('amountReceivedInput');
+            input.value = input.value.slice(0, -1);
+            updateAmountReceived();
+            input.focus();
         }
 
         function clearAmountReceived() {
