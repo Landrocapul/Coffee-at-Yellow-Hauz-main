@@ -1,0 +1,1589 @@
+<?php
+require_once 'db.php';
+
+// Check if user is logged in
+if (!isLoggedIn()) {
+    redirect('index.php');
+}
+
+// Get current user info
+$currentUser = getCurrentUser();
+
+// Get categories
+$stmt = $pdo->query("SELECT * FROM categories WHERE status = 'active' ORDER BY sort_order ASC");
+$categories = $stmt->fetchAll();
+
+// Get selected category (default to first category)
+$selectedCategoryId = isset($_GET['category']) ? (int)$_GET['category'] : (isset($categories[0]['id']) ? $categories[0]['id'] : 0);
+$searchTerm = sanitize($_GET['search'] ?? '');
+
+// Get menu items for selected category
+$menuItems = [];
+if ($searchTerm !== '') {
+    $searchLike = '%' . $searchTerm . '%';
+    $stmt = $pdo->prepare("SELECT mi.*, c.name as category_name, c.icon as category_icon 
+                          FROM menu_items mi 
+                          JOIN categories c ON mi.category_id = c.id 
+                          WHERE mi.is_available = 1 
+                          AND (mi.name LIKE ? OR mi.description LIKE ? OR c.name LIKE ?)
+                          ORDER BY c.sort_order ASC, mi.sort_order ASC");
+    $stmt->execute([$searchLike, $searchLike, $searchLike]);
+    $menuItems = $stmt->fetchAll();
+} elseif ($selectedCategoryId > 0) {
+    $stmt = $pdo->prepare("SELECT mi.*, c.name as category_name, c.icon as category_icon 
+                          FROM menu_items mi 
+                          JOIN categories c ON mi.category_id = c.id 
+                          WHERE mi.category_id = ? AND mi.is_available = 1 
+                          ORDER BY mi.sort_order ASC");
+    $stmt->execute([$selectedCategoryId]);
+    $menuItems = $stmt->fetchAll();
+}
+
+// Get category item counts
+$categoryCounts = [];
+foreach ($categories as $cat) {
+    $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM menu_items WHERE category_id = ? AND is_available = 1");
+    $stmt->execute([$cat['id']]);
+    $categoryCounts[$cat['id']] = $stmt->fetch()['count'];
+}
+
+// Get tables
+$stmt = $pdo->query("SELECT * FROM tables ORDER BY table_number ASC");
+$tables = $stmt->fetchAll();
+$availableTables = array_values(array_filter($tables, function ($table) {
+    return $table['status'] === 'available';
+}));
+
+// Get active orders (for bottom bar)
+$stmt = $pdo->prepare("SELECT o.*, t.table_number, u.full_name as cashier_name 
+                      FROM orders o 
+                      LEFT JOIN tables t ON o.table_id = t.id 
+                      LEFT JOIN users u ON o.cashier_id = u.id 
+                      WHERE o.status IN ('pending', 'processing') 
+                      ORDER BY o.created_at DESC 
+                      LIMIT 5");
+$activeOrders = $stmt->fetchAll();
+
+// Get low stock items for in-app notifications
+$lowStockThreshold = 5;
+$stmt = $pdo->prepare("SELECT mi.id, mi.name, mi.quantity, c.name as category_name
+                      FROM menu_items mi
+                      JOIN categories c ON mi.category_id = c.id
+                      WHERE mi.is_available = 1 AND mi.quantity <= ?
+                      ORDER BY mi.quantity ASC, mi.name ASC");
+$stmt->execute([$lowStockThreshold]);
+$lowStockItems = $stmt->fetchAll();
+$lowStockCount = count($lowStockItems);
+
+// Initialize cart if not exists
+if (!isset($_SESSION['cart'])) {
+    $_SESSION['cart'] = [];
+}
+
+// Handle cart actions
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    $action = $_POST['action'];
+    
+    if ($action === 'add_to_cart') {
+        $itemId = (int)$_POST['item_id'];
+        $quantity = (int)$_POST['quantity'];
+        
+        // Get current stock
+        $stmt = $pdo->prepare("SELECT id, name, price, image_url, quantity FROM menu_items WHERE id = ?");
+        $stmt->execute([$itemId]);
+        $item = $stmt->fetch();
+        
+        if ($item) {
+            // Check if enough stock available
+            if ($item['quantity'] <= 0) {
+                $_SESSION['error'] = htmlspecialchars($item['name']) . " is out of stock.";
+            } elseif ($quantity <= 0) {
+                $_SESSION['error'] = "Invalid quantity for " . htmlspecialchars($item['name']) . ".";
+            } elseif ($quantity > $item['quantity']) {
+                // Not enough stock
+                $_SESSION['error'] = "Not enough stock for " . htmlspecialchars($item['name']) . ". Available: " . $item['quantity'] . ", Requested: " . $quantity;
+            } else {
+                // Enough stock, add to cart and reduce stock
+                if (isset($_SESSION['cart'][$itemId])) {
+                    $_SESSION['cart'][$itemId]['quantity'] += $quantity;
+                } else {
+                    $_SESSION['cart'][$itemId] = [
+                        'id' => $item['id'],
+                        'name' => $item['name'],
+                        'price' => $item['price'],
+                        'image_url' => $item['image_url'],
+                        'quantity' => $quantity
+                    ];
+                }
+                
+                // Reduce stock immediately
+                $stmt = $pdo->prepare("UPDATE menu_items SET quantity = quantity - ? WHERE id = ? AND quantity >= ?");
+                $stmt->execute([$quantity, $itemId, $quantity]);
+            }
+        }
+    } elseif ($action === 'update_quantity') {
+        $itemId = (int)$_POST['item_id'];
+        $quantity = (int)$_POST['quantity'];
+        
+        if (isset($_SESSION['cart'][$itemId])) {
+            $currentCartQuantity = $_SESSION['cart'][$itemId]['quantity'];
+            
+            if ($quantity <= 0) {
+                // Return stock when removing from cart
+                $stmt = $pdo->prepare("UPDATE menu_items SET quantity = quantity + ? WHERE id = ?");
+                $stmt->execute([$currentCartQuantity, $itemId]);
+                unset($_SESSION['cart'][$itemId]);
+            } else {
+                $quantityDiff = $quantity - $currentCartQuantity;
+                
+                if ($quantityDiff > 0) {
+                    // Increasing quantity - check if enough stock available
+                    $stmt = $pdo->prepare("SELECT quantity FROM menu_items WHERE id = ?");
+                    $stmt->execute([$itemId]);
+                    $availableStock = $stmt->fetchColumn();
+                    
+                    if ($quantityDiff > $availableStock) {
+                        $_SESSION['error'] = "Not enough stock. Available: " . $availableStock . ", Requested additional: " . $quantityDiff;
+                    } else {
+                        // Reduce additional stock
+                        $stmt = $pdo->prepare("UPDATE menu_items SET quantity = quantity - ? WHERE id = ?");
+                        $stmt->execute([$quantityDiff, $itemId]);
+                        $_SESSION['cart'][$itemId]['quantity'] = $quantity;
+                    }
+                } else {
+                    // Decreasing quantity - return difference to stock
+                    $stmt = $pdo->prepare("UPDATE menu_items SET quantity = quantity + ? WHERE id = ?");
+                    $stmt->execute([abs($quantityDiff), $itemId]);
+                    $_SESSION['cart'][$itemId]['quantity'] = $quantity;
+                }
+            }
+        }
+    } elseif ($action === 'remove_from_cart') {
+        $itemId = (int)$_POST['item_id'];
+        
+        // Return stock to inventory
+        if (isset($_SESSION['cart'][$itemId])) {
+            $cartQuantity = $_SESSION['cart'][$itemId]['quantity'];
+            $stmt = $pdo->prepare("UPDATE menu_items SET quantity = quantity + ? WHERE id = ?");
+            $stmt->execute([$cartQuantity, $itemId]);
+            unset($_SESSION['cart'][$itemId]);
+        }
+    } elseif ($action === 'clear_cart') {
+        // Return all stock to inventory
+        foreach ($_SESSION['cart'] as $itemId => $item) {
+            $stmt = $pdo->prepare("UPDATE menu_items SET quantity = quantity + ? WHERE id = ?");
+            $stmt->execute([$item['quantity'], $itemId]);
+        }
+        $_SESSION['cart'] = [];
+    } elseif ($action === 'clear_cart_no_return') {
+        // Clear cart without returning stock (for confirmed orders)
+        $_SESSION['cart'] = [];
+    }
+    
+    redirect('menu.php?category=' . $selectedCategoryId);
+}
+
+// Calculate cart totals
+$subtotal = 0;
+$taxRate = getSetting('tax_rate') ? (float)getSetting('tax_rate') : 12;
+foreach ($_SESSION['cart'] as $item) {
+    $subtotal += $item['price'] * $item['quantity'];
+}
+$taxAmount = $subtotal * ($taxRate / 100);
+$totalAmount = $subtotal + $taxAmount;
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yellow Hauz POS Dashboard</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,500&display=swap" rel="stylesheet">
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        serif: ['Playfair Display', 'serif'],
+                    },
+                    colors: {
+                        brand: {
+                            DEFAULT: '#FBBF24',
+                            light: '#FEF9C3',
+                            dark: '#D97706',
+                            black: '#171717',
+                        },
+                        vintage: {
+                            paper: '#F5F4F0',
+                            border: '#E5E5E5'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #E5E5E5; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #A3A3A3; }
+    </style>
+</head>
+<body class="bg-[#EAE8E3] h-screen w-screen p-3 font-sans text-brand-black overflow-hidden">
+
+    <div class="bg-vintage-paper w-full h-full rounded-2xl shadow-2xl flex overflow-hidden border border-gray-300">
+        
+        
+        <aside id="sidebar" class="w-[80px] bg-white border-r border-vintage-border flex flex-col justify-between py-6 px-4 shrink-0 z-10 transition-all duration-300 ease-in-out">
+            <div>
+                <!-- Logo -->
+                <div class="flex flex-col items-center justify-center mb-10 mt-2 text-center">
+                    <span class="font-serif italic text-sm text-gray-500 mb-1">Coffee at</span>
+                    <h1 class="font-serif font-bold text-2xl leading-none text-brand-black tracking-tight uppercase">Yellow Hauz</h1>
+                    <div class="flex items-center gap-2 mt-2">
+                        <div class="h-px w-4 bg-brand"></div>
+                        <span class="text-[10px] tracking-[0.2em] text-gray-400 uppercase font-semibold">Since 2007</span>
+                        <div class="h-px w-4 bg-brand"></div>
+                    </div>
+                </div>
+
+                <!-- Navigation -->
+                <nav id="navigation" class="space-y-2">
+                    <a href="menu.php" class="flex items-center gap-4 bg-brand-black text-brand px-4 py-3.5 rounded-2xl font-semibold shadow-md transition-all">
+                        <i class="fa-solid fa-mug-hot w-5 text-center"></i> <span class="nav-text">Menu</span>
+                    </a>
+                    <a href="table.php" class="flex items-center gap-4 text-gray-500 hover:text-brand-black hover:bg-gray-100 px-4 py-3.5 rounded-2xl font-medium transition-all">
+                        <i class="fa-solid fa-utensils w-5 text-center"></i> <span class="nav-text">Table Services</span>
+                    </a>
+                    <a href="ticket.php" class="flex items-center gap-4 text-gray-500 hover:text-brand-black hover:bg-gray-100 px-4 py-3.5 rounded-2xl font-medium transition-all">
+                        <i class="fa-solid fa-receipt w-5 text-center"></i> <span class="nav-text">Tickets</span>
+                    </a>
+                    <?php if (isAdmin()): ?>
+                    <a href="items.php" class="flex items-center gap-4 text-gray-500 hover:text-brand-black hover:bg-gray-100 px-4 py-3.5 rounded-2xl font-medium transition-all">
+                        <i class="fa-solid fa-clipboard-list w-5 text-center"></i> <span class="nav-text">Manage Food Items</span>
+                    </a>
+                    <a href="sales.php" class="flex items-center gap-4 text-gray-500 hover:text-brand-black hover:bg-gray-100 px-4 py-3.5 rounded-2xl font-medium transition-all">
+                        <i class="fa-solid fa-chart-line w-5 text-center"></i> <span class="nav-text">Sales Report</span>
+                    </a>
+                    <a href="analysis.php" class="flex items-center gap-4 text-gray-500 hover:text-brand-black hover:bg-gray-100 px-4 py-3.5 rounded-2xl font-medium transition-all">
+                        <i class="fa-solid fa-chart-pie w-5 text-center"></i> <span class="nav-text">Product Analytics</span>
+                    </a>
+                    <a href="settings.php" class="flex items-center gap-4 text-gray-500 hover:text-brand-black hover:bg-gray-100 px-4 py-3.5 rounded-2xl font-medium transition-all">
+                        <i class="fa-solid fa-gear w-5 text-center"></i> <span class="nav-text">Settings</span>
+                    </a>
+                    <?php endif; ?>
+                </nav>
+            </div>
+
+            <!-- Bottom Users / Logout -->
+            <div class="space-y-4">
+                <div class="space-y-3 px-2">
+                    <div class="flex items-center gap-3 cursor-pointer p-2 rounded-xl hover:bg-gray-100">
+                        <div class="w-8 h-8 rounded-full bg-brand text-brand-black flex items-center justify-center text-xs font-bold relative">
+                            <?php echo strtoupper(substr($currentUser['full_name'], 0, 2)); ?>
+                            <span class="absolute top-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white rounded-full"></span>
+                        </div>
+                        <span class="text-sm font-medium nav-text"><?php echo htmlspecialchars($currentUser['full_name']); ?></span>
+                    </div>
+                </div>
+                <hr class="border-gray-200">
+                <a href="#" onclick="showLogoutModal()" class="flex items-center gap-3 text-gray-500 hover:text-brand-black px-4 py-2 font-medium transition-all">
+                    <i class="fa-solid fa-arrow-right-from-bracket"></i> <span class="nav-text">Logout</span>
+                </a>
+            </div>
+        </aside>
+
+        <main class="flex-1 flex flex-col relative bg-vintage-paper">
+            <!-- Top Header -->
+            <header class="h-[88px] flex items-center justify-between px-8 shrink-0 border-b border-gray-200/50">
+                <button id="sidebarToggle" class="w-10 h-10 bg-white rounded-xl shadow-sm border border-gray-200 flex items-center justify-center text-gray-500 hover:text-brand-black">
+                    <i class="fa-solid fa-bars"></i>
+                </button>
+                
+                <form method="GET" action="menu.php" class="flex-1 max-w-2xl mx-6 relative">
+                    <i class="fa-solid fa-search absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"></i>
+                    <input type="text" name="search" value="<?php echo htmlspecialchars($searchTerm); ?>" placeholder="Search coffee, pastries, etc..." class="w-full bg-white h-12 rounded-full pl-12 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-brand shadow-sm border border-gray-200">
+                    <?php if ($searchTerm !== ''): ?>
+                    <a href="menu.php?category=<?php echo (int)$selectedCategoryId; ?>" class="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-brand-black transition-colors">
+                        <i class="fa-solid fa-xmark"></i>
+                    </a>
+                    <?php endif; ?>
+                </form>
+
+                <button onclick="showStockNotificationModal()" class="relative w-10 h-10 bg-white rounded-xl shadow-sm border <?php echo $lowStockCount > 0 ? 'border-red-200 text-red-600' : 'border-gray-200 text-gray-500'; ?> flex items-center justify-center hover:text-brand-black transition-colors" title="Stock notifications">
+                    <i class="fa-solid fa-bell"></i>
+                    <?php if ($lowStockCount > 0): ?>
+                    <span class="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 bg-red-600 text-white rounded-full text-[10px] font-bold flex items-center justify-center border-2 border-vintage-paper">
+                        <?php echo $lowStockCount; ?>
+                    </span>
+                    <?php endif; ?>
+                </button>
+            </header>
+
+            <div class="flex-1 overflow-y-auto px-8 pb-32 pt-6 flex gap-6">
+                <!-- Categories Sidebar -->
+                <div class="flex flex-col gap-3 shrink-0">
+                    <?php foreach ($categories as $category): ?>
+                    <div class="w-[100px] h-[100px] <?php echo $category['id'] == $selectedCategoryId ? 'bg-brand text-brand-black' : 'bg-white'; ?> rounded-2xl flex flex-col items-center justify-center cursor-pointer shadow-sm border <?php echo $category['id'] == $selectedCategoryId ? 'border-brand/30' : 'border-gray-200 hover:border-brand'; ?> transition-all" onclick="selectCategory(<?php echo $category['id']; ?>)">
+                        <div class="w-10 h-10 mb-1 flex items-center justify-center text-xl"><i class="<?php echo htmlspecialchars($category['icon']); ?>"></i></div>
+                        <span class="font-bold text-xs text-center leading-tight"><?php echo htmlspecialchars($category['name']); ?></span>
+                        <span class="text-[10px] <?php echo $category['id'] == $selectedCategoryId ? 'text-brand-black/70' : 'text-gray-400'; ?> mt-0.5"><?php echo $categoryCounts[$category['id']] ?? 0; ?></span>
+                    </div>
+                    <?php endforeach; ?>
+                </div>
+
+                <!-- Product Grid -->
+                <div class="flex-1 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                    <?php if (empty($menuItems)): ?>
+                    <div class="col-span-full flex flex-col items-center justify-center text-center py-16 text-gray-400">
+                        <i class="fa-solid fa-magnifying-glass text-4xl mb-3"></i>
+                        <p class="text-sm font-bold text-gray-500">No menu items found</p>
+                        <?php if ($searchTerm !== ''): ?>
+                        <p class="text-xs mt-1">Try a different search term.</p>
+                        <?php endif; ?>
+                    </div>
+                    <?php endif; ?>
+
+                    <?php foreach ($menuItems as $item): ?>
+                    <?php $isOutOfStock = (int)($item['quantity'] ?? 0) <= 0; ?>
+                    <div class="bg-white p-3 rounded-2xl shadow-sm border <?php echo $isOutOfStock ? 'border-red-100 opacity-60 cursor-not-allowed' : 'border-gray-200 hover:shadow-md cursor-pointer hover:border-brand'; ?> flex flex-col transition-all group" <?php if (!$isOutOfStock): ?>onclick="addToCart(<?php echo $item['id']; ?>)"<?php endif; ?>>
+                        <div class="relative w-full h-[160px] rounded-xl overflow-hidden mb-3 bg-gray-100 border border-gray-100">
+                            <?php if ($item['is_best_seller']): ?>
+                            <span class="absolute top-2 left-2 bg-brand text-brand-black text-[10px] font-bold px-2 py-1 rounded-md z-10 uppercase tracking-wide border border-brand-black">Best Seller</span>
+                            <?php endif; ?>
+                            <?php if ($isOutOfStock): ?>
+                            <span class="absolute top-2 right-2 bg-red-600 text-white text-[10px] font-bold px-2 py-1 rounded-md z-10 uppercase tracking-wide">Out of Stock</span>
+                            <?php endif; ?>
+                            <img src="<?php echo htmlspecialchars($item['image_url']); ?>" alt="<?php echo htmlspecialchars($item['name']); ?>" class="w-full h-full object-cover <?php echo $isOutOfStock ? 'grayscale' : 'group-hover:scale-105'; ?> transition-transform duration-500">
+                        </div>
+                        <h3 class="font-bold text-sm leading-tight mb-1 font-serif text-lg"><?php echo htmlspecialchars($item['name']); ?></h3>
+                        <div class="flex justify-between items-end mt-auto pt-2">
+                            <div class="flex flex-col">
+                                <span class="font-bold text-brand-black"><?php echo formatCurrency($item['price']); ?></span>
+                                <span class="text-xs <?php echo $isOutOfStock ? 'text-red-600 font-bold' : 'text-gray-500'; ?>">Qty: <?php echo $item['quantity'] ?? 0; ?></span>
+                            </div>
+                            <div class="flex items-center gap-1 text-[10px] text-gray-600 font-bold tracking-wider uppercase border border-gray-200 px-2 py-0.5 rounded bg-gray-50">
+                                <?php echo strtoupper($item['temperature']); ?>
+                            </div>
+                        </div>
+                    </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+
+            <!-- Bottom Active Tickets Bar -->
+            <div class="absolute bottom-6 left-8 right-8 flex gap-4">
+                <?php foreach ($activeOrders as $order): ?>
+                <div class="<?php echo $order['status'] == 'processing' ? 'bg-brand-black text-white border-2 border-brand' : 'bg-white'; ?> rounded-full pl-2 <?php echo $order['status'] == 'processing' ? 'pr-4' : 'pr-6'; ?> py-2 flex items-center gap-3 shadow-lg border border-gray-200 cursor-pointer">
+                    <div class="w-10 h-10 rounded-full <?php echo $order['status'] == 'processing' ? 'bg-brand text-brand-black' : 'bg-brand text-brand-black border border-brand-black'; ?> font-bold flex items-center justify-center">T<?php echo $order['table_number'] ?? 'TA'; ?></div>
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <h4 class="text-sm font-bold leading-tight"><?php echo htmlspecialchars(substr($order['customer_name'] ?? 'Guest', 0, 10)); ?><?php echo strlen($order['customer_name'] ?? '') > 10 ? '...' : ''; ?></h4>
+                            <?php if ($order['status'] == 'processing'): ?>
+                            <span class="bg-white/20 text-[10px] px-1.5 py-0.5 rounded text-white border border-white/10 uppercase tracking-wider">Process</span>
+                            <?php endif; ?>
+                        </div>
+                        <p class="text-xs <?php echo $order['status'] == 'processing' ? 'text-gray-300' : 'text-gray-400'; ?>"><?php echo $order['id']; ?> items &rarr; Bar</p>
+                    </div>
+                </div>
+                <?php endforeach; ?>
+            </div>
+        </main>
+
+        <!-- RIGHT ORDER PANEL -->
+        <aside class="w-[360px] bg-white border-l border-vintage-border flex flex-col shrink-0 z-10 shadow-[-10px_0_20px_rgba(0,0,0,0.02)]">
+            
+            <!-- Panel Header -->
+            <div class="p-4 pb-3 border-b border-gray-100">
+                <div class="flex justify-between items-start mb-3">
+                    <div>
+                        <button onclick="showTableSelectModal()" class="group flex items-center gap-2 text-left">
+                            <h2 id="selectedTableLabel" class="text-xl font-serif font-bold group-hover:text-brand-dark transition-colors">Select Table</h2>
+                            <i class="fa-solid fa-pen text-xs text-gray-400 group-hover:text-brand-dark transition-colors"></i>
+                        </button>
+                        <p class="text-xs text-gray-500 font-medium mt-1"><?php echo htmlspecialchars($currentUser['full_name']); ?></p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <!-- Order Type Switch -->
+                        <div class="bg-gray-100 p-1 rounded-lg flex items-center text-sm font-semibold border border-gray-200">
+                            <button id="dineInBtn" onclick="setOrderType('dinein')" class="px-3 py-1.5 rounded-md bg-white text-brand-black font-bold shadow-sm border border-gray-300 transition-all">
+                                <i class="fa-solid fa-utensils mr-1"></i>
+                                Dine In
+                            </button>
+                            <button id="takeAwayBtn" onclick="setOrderType('takeaway')" class="px-3 py-1.5 rounded-md text-gray-500 hover:text-brand-black font-semibold transition-all">
+                                <i class="fa-solid fa-bag-shopping mr-1"></i>
+                                Take Out
+                            </button>
+                        </div>
+                        <button onclick="showTableSelectModal()" class="w-8 h-8 rounded-full bg-gray-100 text-brand-black hover:bg-brand hover:text-brand-black transition-colors flex items-center justify-center border border-transparent hover:border-brand-black">
+                            <i class="fa-solid fa-pen text-sm"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex-1 overflow-y-auto p-4 space-y-3">
+                <?php if (isset($_SESSION['error'])): ?>
+                <div class="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl mb-4">
+                    <div class="flex items-center gap-3">
+                        <i class="fa-solid fa-exclamation-triangle"></i>
+                        <span class="font-medium"><?php echo htmlspecialchars($_SESSION['error']); ?></span>
+                    </div>
+                </div>
+                <?php unset($_SESSION['error']); ?>
+                <?php else: ?>
+                <?php if (empty($_SESSION['cart'])): ?>
+                <div class="text-center py-8 text-gray-400">
+                    <i class="fa-solid fa-cart-shopping text-4xl mb-3"></i>
+                    <p class="text-sm font-medium">No items in cart</p>
+                </div>
+                <?php else: ?>
+                <?php foreach ($_SESSION['cart'] as $item): ?>
+                <div class="flex gap-2 border border-gray-200 p-2 rounded-xl shadow-sm bg-white">
+                    <img src="<?php echo htmlspecialchars($item['image_url']); ?>" class="w-12 h-12 rounded-lg object-cover shrink-0 border border-gray-100">
+                    <div class="flex-1 flex flex-col justify-between">
+                        <h4 class="text-sm font-serif font-bold leading-tight"><?php echo htmlspecialchars($item['name']); ?></h4>
+                        <div class="flex justify-between items-center mt-1">
+                            <span class="text-gray-500 text-xs"><?php echo formatCurrency($item['price']); ?></span>
+                            <div class="flex items-center gap-1">
+                                <button onclick="updateQuantity(<?php echo $item['id']; ?>, <?php echo $item['quantity']; ?> - 1)" class="w-6 h-6 rounded bg-gray-100 hover:bg-gray-200 text-gray-600 hover:text-gray-800 flex items-center justify-center transition-colors">
+                                    <i class="fa-solid fa-minus text-xs"></i>
+                                </button>
+                                <span class="text-xs font-bold px-2 py-0.5 bg-gray-100 rounded border border-gray-200 min-w-[30px] text-center"><?php echo $item['quantity']; ?></span>
+                                <button onclick="updateQuantity(<?php echo $item['id']; ?>, <?php echo $item['quantity']; ?> + 1)" class="w-6 h-6 rounded bg-gray-100 hover:bg-gray-200 text-gray-600 hover:text-gray-800 flex items-center justify-center transition-colors">
+                                    <i class="fa-solid fa-plus text-xs"></i>
+                                </button>
+                            </div>
+                            <span class="font-bold text-sm"><?php echo formatCurrency($item['price'] * $item['quantity']); ?></span>
+                        </div>
+                    </div>
+                    <button class="text-gray-400 hover:text-red-500 transition-colors ml-2" onclick="removeFromCart(<?php echo $item['id']; ?>)">
+                        <i class="fa-solid fa-trash text-sm"></i>
+                    </button>
+                </div>
+                <?php endforeach; ?>
+                <?php endif; ?>
+                <?php endif; ?>
+            </div>
+
+            <!-- Totals & Payment Checkout -->
+            <div class="p-4 bg-vintage-paper border-t border-gray-200 shrink-0">
+                <div class="flex justify-between items-center mb-4">
+                    <span class="font-bold text-base font-serif">Total Amount</span>
+                    <span id="panelTotalAmount" class="font-bold text-xl text-brand-black"><?php echo formatCurrency($totalAmount); ?></span>
+                </div>
+
+                <div class="grid grid-cols-[1fr_auto] gap-2 mb-3">
+                    <button onclick="showAmountReceivedModal()" class="bg-white text-brand-black py-3 rounded-xl font-bold text-sm hover:bg-gray-100 transition-colors border border-gray-300 flex items-center justify-center gap-2">
+                        <i class="fa-solid fa-money-bill-transfer"></i>
+                        Amount Given
+                    </button>
+                    <div class="bg-white border border-gray-200 rounded-xl px-3 py-2 min-w-[105px] text-right">
+                        <p class="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Change</p>
+                        <p id="panelChangeAmount" class="text-sm font-bold text-brand-black"><?php echo formatCurrency(0); ?></p>
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="grid grid-cols-3 gap-2">
+                    <button onclick="showPaymentModal()" class="bg-brand-black text-brand py-3 rounded-xl font-bold text-sm hover:bg-gray-800 transition-colors border border-transparent flex items-center justify-center gap-2">
+                        <i class="fa-solid fa-credit-card"></i>
+                        Payment
+                    </button>
+                    <button onclick="showCouponModal()" class="bg-gray-100 text-brand-black py-3 rounded-xl font-bold text-sm hover:bg-gray-200 transition-colors border border-gray-300 flex items-center justify-center gap-2">
+                        <i class="fa-solid fa-ticket"></i>
+                        Coupon
+                    </button>
+                    <button onclick="showBillModal()" class="bg-brand-black text-brand py-3 rounded-xl font-bold text-sm hover:bg-gray-800 transition-colors border border-transparent flex items-center justify-center gap-2">
+                        <i class="fa-solid fa-print"></i>
+                        Print Bill
+                    </button>
+                </div>
+            </div>
+        </aside>
+
+    </div>
+
+    <!-- Stock Notification Modal -->
+    <div id="stockNotificationModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-2xl p-6 max-w-lg w-full mx-4 shadow-2xl border border-gray-200 max-h-[80vh] overflow-hidden flex flex-col">
+            <div class="flex items-center justify-between mb-5">
+                <div class="flex items-center gap-3">
+                    <div class="w-12 h-12 rounded-full <?php echo $lowStockCount > 0 ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'; ?> flex items-center justify-center">
+                        <i class="fa-solid <?php echo $lowStockCount > 0 ? 'fa-triangle-exclamation' : 'fa-check'; ?> text-xl"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-xl font-serif font-bold text-brand-black">Stock Notifications</h3>
+                        <p class="text-xs text-gray-500"><?php echo $lowStockCount > 0 ? $lowStockCount . ' item(s) need restocking' : 'All items are stocked'; ?></p>
+                    </div>
+                </div>
+                <button onclick="hideStockNotificationModal()" class="w-9 h-9 rounded-full bg-gray-100 text-gray-500 hover:text-brand-black hover:bg-gray-200 transition-colors">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <div class="flex-1 overflow-y-auto space-y-3 pr-1">
+                <?php if ($lowStockCount > 0): ?>
+                    <?php foreach ($lowStockItems as $stockItem): ?>
+                    <div class="flex items-center justify-between p-4 rounded-xl border <?php echo (int)$stockItem['quantity'] === 0 ? 'border-red-200 bg-red-50' : 'border-yellow-200 bg-yellow-50'; ?>">
+                        <div>
+                            <p class="font-bold text-brand-black"><?php echo htmlspecialchars($stockItem['name']); ?></p>
+                            <p class="text-xs text-gray-500 mt-1"><?php echo htmlspecialchars($stockItem['category_name']); ?></p>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-lg font-bold <?php echo (int)$stockItem['quantity'] === 0 ? 'text-red-600' : 'text-yellow-700'; ?>">
+                                <?php echo (int)$stockItem['quantity']; ?>
+                            </p>
+                            <p class="text-[10px] uppercase tracking-wider font-bold <?php echo (int)$stockItem['quantity'] === 0 ? 'text-red-600' : 'text-yellow-700'; ?>">
+                                <?php echo (int)$stockItem['quantity'] === 0 ? 'Out of stock' : 'Low stock'; ?>
+                            </p>
+                        </div>
+                    </div>
+                    <?php endforeach; ?>
+                <?php else: ?>
+                    <div class="text-center py-10 text-gray-400">
+                        <i class="fa-solid fa-boxes-stacked text-4xl mb-3"></i>
+                        <p class="text-sm font-medium">No low stock items</p>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <div class="pt-5 mt-5 border-t border-gray-100 flex gap-3">
+                <a href="items.php" class="flex-1 bg-brand-black text-brand py-3 rounded-xl font-bold hover:bg-gray-800 transition-colors text-center">
+                    Manage Stock
+                </a>
+                <button onclick="hideStockNotificationModal()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Logout Confirmation Modal -->
+    <div id="logoutModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-200">
+            <div class="flex items-center justify-center w-16 h-16 bg-red-100 rounded-full mx-auto mb-4">
+                <i class="fa-solid fa-arrow-right-from-bracket text-red-600 text-2xl"></i>
+            </div>
+            <h3 class="text-xl font-serif font-bold text-brand-black text-center mb-2">Confirm Logout</h3>
+            <p class="text-gray-600 text-center mb-6">Are you sure you want to logout? You will need to sign in again to access the system.</p>
+            <div class="flex gap-3">
+                <button onclick="hideLogoutModal()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">
+                    Cancel
+                </button>
+                <a href="logout.php" class="flex-1 bg-red-600 text-white py-3 rounded-xl font-bold hover:bg-red-700 transition-colors text-center">
+                    Logout
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bill Modal -->
+    <div id="billModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-2xl max-w-md w-full mx-4 shadow-2xl border border-gray-200 max-h-[90vh] overflow-y-auto">
+            <!-- Bill Header -->
+            <div class="p-6 border-b border-gray-100">
+                <div class="text-center mb-4">
+                    <h3 class="text-2xl font-serif font-bold text-brand-black mb-2">Coffee at Yellow Hauz</h3>
+                    <p class="text-xs text-gray-500">Yellow Hauz, Philippines</p>
+                    <p class="text-xs text-gray-500">+63 912 345 6789</p>
+                </div>
+                
+                <div class="flex justify-between items-center mb-4">
+                    <div>
+                        <p id="billTableLabel" class="text-sm font-bold text-brand-black">Select Table</p>
+                        <p id="billOrderTypeLabel" class="text-xs text-gray-500">Dine In</p>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-xs text-gray-500">Order #<?php echo date('Ymd') . rand(100, 999); ?></p>
+                        <p class="text-xs text-gray-500"><?php echo date('M d, Y h:i A'); ?></p>
+                    </div>
+                </div>
+                
+                <div class="text-center">
+                    <p class="text-sm font-bold text-brand-black"><?php echo htmlspecialchars($currentUser['full_name']); ?></p>
+                    <p id="billPaymentMethodLabel" class="text-xs text-gray-500 mt-1">Payment: Cash</p>
+                    <p id="billDiscountHeader" class="text-xs text-gray-500 mt-1 hidden">Discount: None</p>
+                </div>
+            </div>
+
+            <!-- Bill Items -->
+            <div class="p-6">
+                <div class="space-y-3 mb-6">
+                    <?php if (!empty($_SESSION['cart'])): ?>
+                        <?php foreach ($_SESSION['cart'] as $item): ?>
+                        <div class="flex justify-between items-start">
+                            <div class="flex-1">
+                                <p class="text-sm font-medium text-brand-black"><?php echo htmlspecialchars($item['name']); ?></p>
+                                <p class="text-xs text-gray-500"><?php echo $item['quantity']; ?> × <?php echo formatCurrency($item['price']); ?></p>
+                            </div>
+                            <p class="text-sm font-bold text-brand-black"><?php echo formatCurrency($item['price'] * $item['quantity']); ?></p>
+                        </div>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <p class="text-center text-gray-400 text-sm">No items in cart</p>
+                    <?php endif; ?>
+                </div>
+
+                <!-- Bill Summary -->
+                <div class="border-t border-gray-200 pt-4 space-y-2">
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-600 font-medium">Subtotal</span>
+                        <span id="billSubtotalAmount" class="font-bold"><?php echo formatCurrency($subtotal); ?></span>
+                    </div>
+                    <div id="billDiscountAmountRow" class="hidden justify-between text-sm">
+                        <span class="text-gray-600 font-medium">Discount Amount</span>
+                        <span id="billDiscountAmount" class="font-bold text-green-600">-<?php echo formatCurrency(0); ?></span>
+                    </div>
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-600 font-medium">Tax (<?php echo $taxRate; ?>%)</span>
+                        <span id="billTaxAmount" class="font-bold"><?php echo formatCurrency($taxAmount); ?></span>
+                    </div>
+                    <div id="billDiscountRow" class="hidden justify-between text-sm">
+                        <span class="text-gray-600 font-medium">Discount</span>
+                        <span id="billDiscountLabel" class="font-bold text-brand-black">None</span>
+                    </div>
+                    <div class="flex justify-between text-lg font-bold pt-2 border-t border-gray-200">
+                        <span class="text-brand-black">Total</span>
+                        <span id="billTotalAmount" class="text-brand-black"><?php echo formatCurrency($totalAmount); ?></span>
+                    </div>
+                    <div class="flex justify-between text-sm pt-2 border-t border-gray-100">
+                        <span class="text-gray-600 font-medium">Amount Given</span>
+                        <span id="billAmountReceived" class="font-bold text-brand-black"><?php echo formatCurrency(0); ?></span>
+                    </div>
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-600 font-medium">Change</span>
+                        <span id="billChangeAmount" class="font-bold text-brand-black"><?php echo formatCurrency(0); ?></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bill Footer -->
+            <div class="p-6 border-t border-gray-100 bg-gray-50">
+                <p class="text-center text-xs text-gray-500 mb-4">Thank you for visiting Coffee at Yellow Hauz!</p>
+                <div class="flex gap-3">
+                    <button onclick="hideBillModal()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">
+                        Close
+                    </button>
+                    <button onclick="printBill()" class="flex-1 bg-brand-black text-brand py-3 rounded-xl font-bold hover:bg-gray-800 transition-colors">
+                        <i class="fa-solid fa-print mr-2"></i> Print
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Payment Modal -->
+    <div id="paymentModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-200">
+            <div class="flex items-center justify-center w-16 h-16 bg-brand-light rounded-full mx-auto mb-4">
+                <i class="fa-solid fa-credit-card text-brand-dark text-2xl"></i>
+            </div>
+            <h3 class="text-xl font-serif font-bold text-brand-black text-center mb-2">Payment Method</h3>
+            <p class="text-gray-600 text-center mb-6">Choose how the customer will pay</p>
+            
+            <div class="space-y-3">
+                <button type="button" onclick="selectPaymentMethod('cash', 'Cash')" class="payment-option w-full flex items-center justify-between p-4 border-2 border-brand-black bg-brand text-brand-black rounded-xl shadow-[2px_2px_0px_0px_rgba(23,23,23,1)] transition-transform active:translate-y-0.5 active:shadow-none" data-payment-method="cash">
+                    <div class="flex items-center gap-3">
+                        <i class="fa-solid fa-money-bill-wave text-xl"></i>
+                        <span class="font-bold">Cash</span>
+                    </div>
+                    <i class="payment-check fa-solid fa-check text-brand-black"></i>
+                </button>
+                
+                <button type="button" onclick="selectPaymentMethod('card', 'Card')" class="payment-option w-full flex items-center justify-between p-4 border border-gray-300 rounded-xl hover:border-brand-black bg-white transition-colors" data-payment-method="card">
+                    <div class="flex items-center gap-3">
+                        <i class="fa-regular fa-credit-card text-xl text-gray-600"></i>
+                        <span class="font-bold text-gray-600">Card</span>
+                    </div>
+                    <i class="payment-check fa-solid fa-check text-brand-black hidden"></i>
+                </button>
+                
+                <button type="button" onclick="selectPaymentMethod('gcash', 'GCash')" class="payment-option w-full flex items-center justify-between p-4 border border-gray-300 rounded-xl hover:border-brand-black bg-white transition-colors" data-payment-method="gcash">
+                    <div class="flex items-center gap-3">
+                        <i class="fa-solid fa-mobile-screen text-xl text-gray-600"></i>
+                        <span class="font-bold text-gray-600">GCash</span>
+                    </div>
+                    <i class="payment-check fa-solid fa-check text-brand-black hidden"></i>
+                </button>
+            </div>
+            
+            <div class="flex gap-3 mt-6">
+                <button onclick="hidePaymentModal()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">
+                    Cancel
+                </button>
+                <button onclick="applyPaymentMethod()" class="flex-1 bg-brand-black text-brand py-3 rounded-xl font-bold hover:bg-gray-800 transition-colors">
+                    Use Method
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Amount Received Modal -->
+    <div id="amountReceivedModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-200">
+            <div class="flex items-center justify-center w-16 h-16 bg-brand-light rounded-full mx-auto mb-4">
+                <i class="fa-solid fa-money-bill-transfer text-brand-dark text-2xl"></i>
+            </div>
+            <h3 class="text-xl font-serif font-bold text-brand-black text-center mb-2">Amount Given</h3>
+            <p class="text-gray-600 text-center mb-6">Enter the amount received from the customer</p>
+
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Customer Amount</label>
+                    <input id="amountReceivedInput" type="number" min="0" step="0.01" placeholder="0.00" oninput="updateAmountReceived()" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                </div>
+
+                <div class="bg-gray-50 rounded-xl p-4 border border-gray-200 space-y-2">
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-600">Total Due</span>
+                        <span id="amountModalTotal" class="font-bold text-brand-black"><?php echo formatCurrency($totalAmount); ?></span>
+                    </div>
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-600">Change</span>
+                        <span id="amountModalChange" class="font-bold text-brand-black"><?php echo formatCurrency(0); ?></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex gap-3 mt-6">
+                <button onclick="clearAmountReceived()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">
+                    Clear
+                </button>
+                <button onclick="hideAmountReceivedModal()" class="flex-1 bg-brand-black text-brand py-3 rounded-xl font-bold hover:bg-gray-800 transition-colors">
+                    Done
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Table Select Modal -->
+    <div id="tableSelectModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-200">
+            <div class="flex items-center justify-center w-16 h-16 bg-brand-light rounded-full mx-auto mb-4">
+                <i class="fa-solid fa-utensils text-brand-dark text-2xl"></i>
+            </div>
+            <h3 class="text-xl font-serif font-bold text-brand-black text-center mb-2">Assign Table</h3>
+            <p class="text-gray-600 text-center mb-6">Choose an available table for this order</p>
+            
+            <div class="grid grid-cols-2 gap-3 max-h-[320px] overflow-y-auto pr-1">
+                <?php foreach ($availableTables as $table): ?>
+                <button type="button" onclick="selectTable(<?php echo (int)$table['id']; ?>, '<?php echo htmlspecialchars('Table ' . $table['table_number'], ENT_QUOTES); ?>')" class="table-option border border-gray-200 rounded-xl p-4 text-left hover:border-brand hover:bg-brand-light transition-colors" data-table-id="<?php echo (int)$table['id']; ?>">
+                    <span class="block font-serif font-bold text-lg text-brand-black">T<?php echo htmlspecialchars($table['table_number']); ?></span>
+                    <span class="block text-xs text-gray-500 font-medium mt-1"><?php echo (int)$table['capacity']; ?> chairs</span>
+                </button>
+                <?php endforeach; ?>
+
+                <?php if (empty($availableTables)): ?>
+                <div class="col-span-2 text-center py-8 text-gray-400">
+                    <i class="fa-solid fa-chair text-3xl mb-3"></i>
+                    <p class="text-sm font-medium">No available tables</p>
+                </div>
+                <?php endif; ?>
+            </div>
+            
+            <div class="flex gap-3 mt-6">
+                <button onclick="clearSelectedTable()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">
+                    No Table
+                </button>
+                <button onclick="hideTableSelectModal()" class="flex-1 bg-brand-black text-brand py-3 rounded-xl font-bold hover:bg-gray-800 transition-colors">
+                    Done
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Coupon Modal -->
+    <div id="couponModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-200">
+            <div class="flex items-center justify-center w-16 h-16 bg-brand-light rounded-full mx-auto mb-4">
+                <i class="fa-solid fa-ticket text-brand-dark text-2xl"></i>
+            </div>
+            <h3 class="text-xl font-serif font-bold text-brand-black text-center mb-2">Select Discount</h3>
+            <p class="text-gray-600 text-center mb-6">Choose the discount type for this order</p>
+            
+            <form class="space-y-4">
+                <div class="space-y-3">
+                    <button type="button" onclick="selectDiscount('Senior Citizen', 20)" class="discount-option w-full flex items-center justify-between p-4 border-2 border-gray-200 rounded-xl hover:border-brand-black hover:bg-brand-light transition-colors text-left">
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 rounded-full bg-brand-light text-brand-dark flex items-center justify-center">
+                                <i class="fa-solid fa-person-cane"></i>
+                            </div>
+                            <div>
+                                <p class="font-bold text-brand-black">Senior Citizen</p>
+                                <p class="text-xs text-gray-500">Apply senior citizen discount</p>
+                            </div>
+                        </div>
+                        <i class="fa-solid fa-chevron-right text-gray-400"></i>
+                    </button>
+
+                    <button type="button" onclick="selectDiscount('PWD', 20)" class="discount-option w-full flex items-center justify-between p-4 border-2 border-gray-200 rounded-xl hover:border-brand-black hover:bg-brand-light transition-colors text-left">
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 rounded-full bg-brand-light text-brand-dark flex items-center justify-center">
+                                <i class="fa-solid fa-wheelchair"></i>
+                            </div>
+                            <div>
+                                <p class="font-bold text-brand-black">PWD</p>
+                                <p class="text-xs text-gray-500">Apply PWD discount</p>
+                            </div>
+                        </div>
+                        <i class="fa-solid fa-chevron-right text-gray-400"></i>
+                    </button>
+
+                    <button type="button" onclick="showAddDiscountFields()" class="w-full flex items-center justify-between p-4 border border-dashed border-gray-300 rounded-xl hover:border-brand-black hover:bg-gray-50 transition-colors text-left">
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center">
+                                <i class="fa-solid fa-plus"></i>
+                            </div>
+                            <div>
+                                <p class="font-bold text-brand-black">Add New</p>
+                                <p class="text-xs text-gray-500">Create a custom discount label</p>
+                            </div>
+                        </div>
+                    </button>
+                </div>
+
+                <div id="addDiscountFields" class="hidden space-y-3">
+                    <input id="customDiscountName" type="text" placeholder="Discount name" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                    <button type="button" onclick="selectCustomDiscount()" class="w-full bg-brand-light text-brand-dark py-3 rounded-xl font-bold hover:bg-brand hover:text-brand-black transition-colors">
+                        Use Custom Discount
+                    </button>
+                </div>
+
+                <div id="discountPercentFields" class="hidden">
+                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Discount Percentage</label>
+                    <div class="relative">
+                        <input id="discountPercentInput" type="number" min="0" max="100" step="1" value="20" oninput="updateDiscountPercent()" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                        <span class="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-gray-500">%</span>
+                    </div>
+                </div>
+                
+                <div class="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                    <div class="flex justify-between items-center text-sm">
+                        <span class="text-gray-600">Selected Discount</span>
+                        <span class="font-bold text-green-600">-₱0.00</span>
+                    </div>
+                </div>
+                
+                <div class="flex gap-3 pt-4">
+                    <button type="button" onclick="clearDiscount()" class="flex-1 bg-white text-red-600 py-3 rounded-xl font-bold hover:bg-red-50 transition-colors border border-red-200">
+                        Remove
+                    </button>
+                    <button type="button" onclick="hideCouponModal()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">
+                        Cancel
+                    </button>
+                    <button type="button" onclick="applyCoupon()" class="flex-1 bg-brand-black text-brand py-3 rounded-xl font-bold hover:bg-gray-800 transition-colors">
+                        Apply
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // Initialize JavaScript variables
+        let cart = <?php echo json_encode(array_values($_SESSION['cart'] ?? [])); ?>;
+        let selectedTableId = null;
+        let selectedTableName = null;
+        let selectedCustomerName = null;
+        let selectedDiscount = null;
+        let selectedDiscountPercent = 0;
+        let selectedPaymentMethod = 'cash';
+        let selectedPaymentLabel = 'Cash';
+        let amountReceived = 0;
+        let orderType = 'dine_in';
+        const baseSubtotal = <?php echo json_encode((float)$subtotal); ?>;
+        const taxRate = <?php echo json_encode((float)$taxRate); ?>;
+        const lowStockCount = <?php echo json_encode((int)$lowStockCount); ?>;
+        const availableTables = <?php echo json_encode(array_map(function ($table) {
+            return [
+                'id' => (int)$table['id'],
+                'name' => 'Table ' . $table['table_number'],
+            ];
+        }, $availableTables)); ?>;
+
+        // Initialize order type buttons
+        document.addEventListener('DOMContentLoaded', function() {
+            setOrderType('dinein');
+            restoreSelectedTable();
+            updateSelectedDiscountDisplay();
+            updatePaymentMethodDisplay();
+            if (lowStockCount > 0) {
+                showNotification(lowStockCount + ' low stock item(s) need attention', 'warning');
+            }
+        });
+
+        function selectCategory(categoryId) {
+            window.location.href = 'menu.php?category=' + categoryId;
+        }
+
+        function addToCart(itemId) {
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = 'menu.php?category=<?php echo $selectedCategoryId; ?>';
+            
+            const actionInput = document.createElement('input');
+            actionInput.type = 'hidden';
+            actionInput.name = 'action';
+            actionInput.value = 'add_to_cart';
+            
+            const itemIdInput = document.createElement('input');
+            itemIdInput.type = 'hidden';
+            itemIdInput.name = 'item_id';
+            itemIdInput.value = itemId;
+            
+            const quantityInput = document.createElement('input');
+            quantityInput.type = 'hidden';
+            quantityInput.name = 'quantity';
+            quantityInput.value = 1;
+            
+            form.appendChild(actionInput);
+            form.appendChild(itemIdInput);
+            form.appendChild(quantityInput);
+            document.body.appendChild(form);
+            form.submit();
+        }
+
+        function clearCartNoReturn() {
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = 'menu.php?category=<?php echo $selectedCategoryId; ?>';
+            
+            const actionInput = document.createElement('input');
+            actionInput.type = 'hidden';
+            actionInput.name = 'action';
+            actionInput.value = 'clear_cart_no_return';
+            
+            form.appendChild(actionInput);
+            document.body.appendChild(form);
+            form.submit();
+        }
+
+        function updateQuantity(itemId, newQuantity) {
+            if (newQuantity < 1) {
+                removeFromCart(itemId);
+                return;
+            }
+            
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = 'menu.php?category=<?php echo $selectedCategoryId; ?>';
+            
+            const actionInput = document.createElement('input');
+            actionInput.type = 'hidden';
+            actionInput.name = 'action';
+            actionInput.value = 'update_quantity';
+            
+            const itemIdInput = document.createElement('input');
+            itemIdInput.type = 'hidden';
+            itemIdInput.name = 'item_id';
+            itemIdInput.value = itemId;
+            
+            const quantityInput = document.createElement('input');
+            quantityInput.type = 'hidden';
+            quantityInput.name = 'quantity';
+            quantityInput.value = newQuantity;
+            
+            form.appendChild(actionInput);
+            form.appendChild(itemIdInput);
+            form.appendChild(quantityInput);
+            document.body.appendChild(form);
+            form.submit();
+        }
+
+        function removeFromCart(itemId) {
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = 'menu.php?category=<?php echo $selectedCategoryId; ?>';
+            
+            const actionInput = document.createElement('input');
+            actionInput.type = 'hidden';
+            actionInput.name = 'action';
+            actionInput.value = 'remove_from_cart';
+            
+            const itemIdInput = document.createElement('input');
+            itemIdInput.type = 'hidden';
+            itemIdInput.name = 'item_id';
+            itemIdInput.value = itemId;
+            
+            form.appendChild(actionInput);
+            form.appendChild(itemIdInput);
+            document.body.appendChild(form);
+            form.submit();
+        }
+
+        function showLogoutModal() {
+            document.getElementById('logoutModal').classList.remove('hidden');
+        }
+        
+        function hideLogoutModal() {
+            document.getElementById('logoutModal').classList.add('hidden');
+        }
+
+        function showStockNotificationModal() {
+            document.getElementById('stockNotificationModal').classList.remove('hidden');
+        }
+        
+        function hideStockNotificationModal() {
+            document.getElementById('stockNotificationModal').classList.add('hidden');
+        }
+
+        function showBillModal() {
+            document.getElementById('billModal').classList.remove('hidden');
+        }
+        
+        function hideBillModal() {
+            document.getElementById('billModal').classList.add('hidden');
+        }
+
+        function showTableSelectModal() {
+            if (orderType === 'take_away') {
+                setOrderType('dinein');
+            }
+            document.getElementById('tableSelectModal').classList.remove('hidden');
+        }
+        
+        function hideTableSelectModal() {
+            document.getElementById('tableSelectModal').classList.add('hidden');
+        }
+
+        function selectTable(tableId, tableName) {
+            selectedTableId = tableId;
+            selectedTableName = tableName;
+            localStorage.setItem('selectedTableId', String(tableId));
+            localStorage.setItem('selectedTableName', tableName);
+            setOrderType('dinein');
+            updateSelectedTableDisplay();
+            hideTableSelectModal();
+        }
+
+        function clearSelectedTable() {
+            selectedTableId = null;
+            selectedTableName = null;
+            localStorage.removeItem('selectedTableId');
+            localStorage.removeItem('selectedTableName');
+            updateSelectedTableDisplay();
+            hideTableSelectModal();
+        }
+
+        function restoreSelectedTable() {
+            const storedTableId = parseInt(localStorage.getItem('selectedTableId'), 10);
+            const storedTableName = localStorage.getItem('selectedTableName');
+            const tableStillAvailable = availableTables.some(table => table.id === storedTableId);
+
+            if (storedTableId && storedTableName && tableStillAvailable) {
+                selectedTableId = storedTableId;
+                selectedTableName = storedTableName;
+            } else {
+                clearSelectedTable();
+                return;
+            }
+
+            updateSelectedTableDisplay();
+        }
+
+        function updateSelectedTableDisplay() {
+            const label = orderType === 'take_away' ? 'Take Out' : (selectedTableName || 'Select Table');
+            document.getElementById('selectedTableLabel').textContent = label;
+            document.getElementById('billTableLabel').textContent = label;
+            document.getElementById('billOrderTypeLabel').textContent = orderType === 'take_away' ? 'Take Out' : 'Dine In';
+
+            document.querySelectorAll('.table-option').forEach(button => {
+                const isSelected = Number(button.dataset.tableId) === selectedTableId;
+                button.classList.toggle('border-brand-black', isSelected);
+                button.classList.toggle('bg-brand', isSelected);
+                button.classList.toggle('shadow-[2px_2px_0px_0px_rgba(23,23,23,1)]', isSelected);
+            });
+        }
+
+        function printBill() {
+            // First record the sale in sales report and ticket system
+            recordSaleAndShowPrintConfirmation();
+        }
+
+        function recordSaleAndShowPrintConfirmation() {
+            if (cart.length === 0) {
+                showNotification('Cart is empty', 'error');
+                return;
+            }
+
+            if (orderType === 'dine_in' && !selectedTableId) {
+                showNotification('Please select an available table first', 'warning');
+                showTableSelectModal();
+                return;
+            }
+
+            const totalDue = getDiscountTotals().totalAmount;
+            if (amountReceived > 0 && amountReceived < totalDue) {
+                showNotification('Amount given is less than total due', 'warning');
+                showAmountReceivedModal();
+                return;
+            }
+
+            const orderData = {
+                cart: cart,
+                table_id: orderType === 'dine_in' ? selectedTableId : null,
+                customer_name: selectedCustomerName || 'Guest',
+                order_type: orderType || 'dine_in',
+                payment_method: selectedPaymentMethod,
+                discount_name: selectedDiscount || '',
+                discount_percent: selectedDiscount ? selectedDiscountPercent : 0,
+                amount_received: amountReceived
+            };
+
+            fetch('api.php?action=create_order', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(orderData)
+            })
+            .then(response => {
+                console.log('Response status:', response.status);
+                console.log('Response headers:', response.headers);
+                return response.text();
+            })
+            .then(text => {
+                console.log('Raw response:', text);
+                try {
+                    const data = JSON.parse(text);
+                    if (data.success) {
+                        // Sale recorded successfully, show print confirmation
+                        showPrintConfirmation(data.order_id, data.order_number);
+                    } else {
+                        showNotification('Failed to record sale: ' + data.error, 'error');
+                    }
+                } catch (e) {
+                    console.error('JSON parse error:', e);
+                    showNotification('Invalid response from server', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Fetch error:', error);
+                showNotification('Error recording sale', 'error');
+            });
+        }
+
+        function showPrintConfirmation(orderId, orderNumber) {
+            // Create confirmation modal
+            const modal = document.createElement('div');
+            modal.className = 'fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50';
+            modal.innerHTML = `
+                <div class="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-200">
+                    <div class="flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mx-auto mb-4">
+                        <i class="fa-solid fa-check text-green-600 text-2xl"></i>
+                    </div>
+                    <h3 class="text-xl font-serif font-bold text-brand-black text-center mb-2">Sale Recorded!</h3>
+                    <p class="text-gray-600 text-center mb-2">Order #${orderNumber} has been saved to sales report and ticket system.</p>
+                    <p class="text-sm text-gray-500 text-center mb-6">Would you like to print the receipt now?</p>
+                    
+                    <div class="flex gap-3">
+                        <button onclick="closePrintConfirmation('${modal.id}')" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">
+                            Skip
+                        </button>
+                        <button onclick="confirmPrint('${modal.id}')" class="flex-1 bg-brand-black text-brand py-3 rounded-xl font-bold hover:bg-gray-800 transition-colors">
+                            <i class="fa-solid fa-print mr-2"></i> Print
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            modal.id = 'printConfirmationModal';
+            document.body.appendChild(modal);
+        }
+
+        function closePrintConfirmation(modalId) {
+            const modal = document.getElementById(modalId);
+            if (modal) {
+                modal.remove();
+            }
+            // Clear cart without returning stock and close bill modal after recording sale
+            cart = [];
+            selectedTableId = null;
+            selectedTableName = null;
+            selectedCustomerName = null;
+            selectedPaymentMethod = 'cash';
+            selectedPaymentLabel = 'Cash';
+            amountReceived = 0;
+            localStorage.removeItem('selectedTableId');
+            localStorage.removeItem('selectedTableName');
+            updatePaymentMethodDisplay();
+            updateAmountReceivedDisplay();
+            clearCartNoReturn();
+            hideBillModal();
+        }
+
+        function confirmPrint(modalId) {
+            // Remove the confirmation modal
+            closePrintConfirmation(modalId);
+            
+            // Show print preview
+            window.print();
+        }
+
+        function updateCart() {
+            // Reload the page to sync cart with server
+            window.location.reload();
+        }
+
+        function showNotification(message, type = 'success') {
+            // Create notification element
+            const notification = document.createElement('div');
+            notification.className = `fixed top-4 right-4 z-50 p-4 rounded-xl shadow-lg border transform transition-all duration-300 translate-x-full`;
+            
+            // Set colors based on type
+            if (type === 'error') {
+                notification.className += ' bg-red-50 border-red-200 text-red-700';
+            } else if (type === 'warning') {
+                notification.className += ' bg-yellow-50 border-yellow-200 text-yellow-700';
+            } else {
+                notification.className += ' bg-green-50 border-green-200 text-green-700';
+            }
+            
+            notification.innerHTML = `
+                <div class="flex items-center gap-3">
+                    <i class="fa-solid ${type === 'error' ? 'fa-exclamation-circle' : type === 'warning' ? 'fa-exclamation-triangle' : 'fa-check-circle'}"></i>
+                    <span class="font-medium">${message}</span>
+                </div>
+            `;
+            
+            document.body.appendChild(notification);
+            
+            // Slide in
+            setTimeout(() => {
+                notification.classList.remove('translate-x-full');
+                notification.classList.add('translate-x-0');
+            }, 100);
+            
+            // Auto remove after 3 seconds
+            setTimeout(() => {
+                notification.classList.add('translate-x-full');
+                setTimeout(() => {
+                    if (notification.parentNode) {
+                        notification.parentNode.removeChild(notification);
+                    }
+                }, 300);
+            }, 3000);
+        }
+
+        function showCouponModal() {
+            document.getElementById('couponModal').classList.remove('hidden');
+        }
+        
+        function hideCouponModal() {
+            document.getElementById('couponModal').classList.add('hidden');
+        }
+
+        function selectDiscount(discountName, discountPercent = 20) {
+            selectedDiscount = discountName;
+            selectedDiscountPercent = Math.max(0, Math.min(100, Number(discountPercent) || 0));
+            document.getElementById('addDiscountFields').classList.add('hidden');
+            document.getElementById('discountPercentFields').classList.remove('hidden');
+            document.getElementById('discountPercentInput').value = selectedDiscountPercent;
+            updateSelectedDiscountDisplay();
+        }
+
+        function showAddDiscountFields() {
+            document.getElementById('addDiscountFields').classList.remove('hidden');
+            document.getElementById('customDiscountName').focus();
+        }
+
+        function selectCustomDiscount() {
+            const customName = document.getElementById('customDiscountName').value.trim();
+            if (!customName) {
+                showNotification('Enter a discount name first', 'warning');
+                return;
+            }
+
+            selectDiscount(customName, 0);
+        }
+
+        function clearDiscount() {
+            selectedDiscount = null;
+            selectedDiscountPercent = 0;
+            document.getElementById('discountPercentFields').classList.add('hidden');
+            document.getElementById('addDiscountFields').classList.add('hidden');
+            document.getElementById('customDiscountName').value = '';
+            document.getElementById('discountPercentInput').value = 0;
+            updateSelectedDiscountDisplay();
+            showNotification('Discount removed', 'success');
+            hideCouponModal();
+        }
+
+        function updateDiscountPercent() {
+            const percentInput = document.getElementById('discountPercentInput');
+            selectedDiscountPercent = Math.max(0, Math.min(100, Number(percentInput.value) || 0));
+            percentInput.value = selectedDiscountPercent;
+            updateSelectedDiscountDisplay();
+        }
+
+        function formatPeso(amount) {
+            return '₱' + Number(amount).toLocaleString('en-PH', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            });
+        }
+
+        function getDiscountTotals() {
+            const discountPercent = selectedDiscount ? selectedDiscountPercent : 0;
+            const discountAmount = baseSubtotal * (discountPercent / 100);
+            const discountedSubtotal = Math.max(0, baseSubtotal - discountAmount);
+            const taxAmount = discountedSubtotal * (taxRate / 100);
+            const totalAmount = discountedSubtotal + taxAmount;
+
+            return {
+                discountAmount,
+                taxAmount,
+                totalAmount
+            };
+        }
+
+        function getChangeAmount() {
+            const totalAmount = getDiscountTotals().totalAmount;
+            return Math.max(0, amountReceived - totalAmount);
+        }
+
+        function showAmountReceivedModal() {
+            document.getElementById('amountReceivedInput').value = amountReceived > 0 ? amountReceived.toFixed(2) : '';
+            updateAmountReceivedDisplay();
+            document.getElementById('amountReceivedModal').classList.remove('hidden');
+            setTimeout(() => document.getElementById('amountReceivedInput').focus(), 50);
+        }
+
+        function hideAmountReceivedModal() {
+            document.getElementById('amountReceivedModal').classList.add('hidden');
+        }
+
+        function updateAmountReceived() {
+            const input = document.getElementById('amountReceivedInput');
+            amountReceived = Math.max(0, Number(input.value) || 0);
+            updateAmountReceivedDisplay();
+        }
+
+        function clearAmountReceived() {
+            amountReceived = 0;
+            document.getElementById('amountReceivedInput').value = '';
+            updateAmountReceivedDisplay();
+        }
+
+        function updateAmountReceivedDisplay() {
+            const totals = getDiscountTotals();
+            const changeAmount = getChangeAmount();
+            const panelChangeAmount = document.getElementById('panelChangeAmount');
+            const billAmountReceived = document.getElementById('billAmountReceived');
+            const billChangeAmount = document.getElementById('billChangeAmount');
+            const amountModalTotal = document.getElementById('amountModalTotal');
+            const amountModalChange = document.getElementById('amountModalChange');
+
+            if (panelChangeAmount) panelChangeAmount.textContent = formatPeso(changeAmount);
+            if (billAmountReceived) billAmountReceived.textContent = formatPeso(amountReceived);
+            if (billChangeAmount) billChangeAmount.textContent = formatPeso(changeAmount);
+            if (amountModalTotal) amountModalTotal.textContent = formatPeso(totals.totalAmount);
+            if (amountModalChange) amountModalChange.textContent = formatPeso(changeAmount);
+        }
+
+        function updateSelectedDiscountDisplay() {
+            const discountLabel = document.getElementById('selectedDiscountLabel') || document.querySelector('#couponModal .bg-gray-50 span:last-child');
+            const discountText = selectedDiscount ? selectedDiscount + ' (' + selectedDiscountPercent + '%)' : 'None';
+            if (discountLabel) {
+                discountLabel.textContent = discountText;
+                discountLabel.className = selectedDiscount ? 'font-bold text-brand-black' : 'font-bold text-gray-400';
+            }
+
+            const billDiscountHeader = document.getElementById('billDiscountHeader');
+            const billDiscountRow = document.getElementById('billDiscountRow');
+            const billDiscountLabel = document.getElementById('billDiscountLabel');
+            const billDiscountAmountRow = document.getElementById('billDiscountAmountRow');
+            const billDiscountAmount = document.getElementById('billDiscountAmount');
+            const billTaxAmount = document.getElementById('billTaxAmount');
+            const billTotalAmount = document.getElementById('billTotalAmount');
+            const panelTotalAmount = document.getElementById('panelTotalAmount');
+            const totals = getDiscountTotals();
+
+            if (billDiscountHeader && billDiscountRow && billDiscountLabel && billDiscountAmountRow && billDiscountAmount && billTaxAmount && billTotalAmount && panelTotalAmount) {
+                billDiscountHeader.textContent = 'Discount: ' + discountText;
+                billDiscountLabel.textContent = discountText;
+                billDiscountAmount.textContent = '-' + formatPeso(totals.discountAmount);
+                billTaxAmount.textContent = formatPeso(totals.taxAmount);
+                billTotalAmount.textContent = formatPeso(totals.totalAmount);
+                panelTotalAmount.textContent = formatPeso(totals.totalAmount);
+                billDiscountHeader.classList.toggle('hidden', !selectedDiscount);
+                billDiscountRow.classList.toggle('hidden', !selectedDiscount);
+                billDiscountRow.classList.toggle('flex', !!selectedDiscount);
+                billDiscountAmountRow.classList.toggle('hidden', !selectedDiscount);
+                billDiscountAmountRow.classList.toggle('flex', !!selectedDiscount);
+            }
+            updateAmountReceivedDisplay();
+
+            document.querySelectorAll('.discount-option').forEach(button => {
+                const isSelected = selectedDiscount && button.textContent.includes(selectedDiscount);
+                button.classList.toggle('border-brand-black', isSelected);
+                button.classList.toggle('bg-brand-light', isSelected);
+            });
+        }
+
+        function applyCoupon() {
+            if (selectedDiscount) {
+                showNotification(selectedDiscount + ' discount selected at ' + selectedDiscountPercent + '%', 'success');
+            }
+            hideCouponModal();
+        }
+
+        function showPaymentModal() {
+            document.getElementById('paymentModal').classList.remove('hidden');
+        }
+        
+        function hidePaymentModal() {
+            document.getElementById('paymentModal').classList.add('hidden');
+        }
+
+        function selectPaymentMethod(method, label) {
+            selectedPaymentMethod = method;
+            selectedPaymentLabel = label;
+            updatePaymentMethodDisplay();
+        }
+
+        function updatePaymentMethodDisplay() {
+            const billPaymentMethodLabel = document.getElementById('billPaymentMethodLabel');
+            if (billPaymentMethodLabel) {
+                billPaymentMethodLabel.textContent = 'Payment: ' + selectedPaymentLabel;
+            }
+
+            document.querySelectorAll('.payment-option').forEach(button => {
+                const isSelected = button.dataset.paymentMethod === selectedPaymentMethod;
+                button.classList.toggle('border-2', isSelected);
+                button.classList.toggle('border-brand-black', isSelected);
+                button.classList.toggle('bg-brand', isSelected);
+                button.classList.toggle('text-brand-black', isSelected);
+                button.classList.toggle('shadow-[2px_2px_0px_0px_rgba(23,23,23,1)]', isSelected);
+                button.classList.toggle('border', !isSelected);
+                button.classList.toggle('border-gray-300', !isSelected);
+                button.classList.toggle('bg-white', !isSelected);
+                const check = button.querySelector('.payment-check');
+                if (check) {
+                    check.classList.toggle('hidden', !isSelected);
+                }
+            });
+        }
+
+        function applyPaymentMethod() {
+            showNotification('Payment method set to ' + selectedPaymentLabel, 'success');
+            hidePaymentModal();
+        }
+
+        function setOrderType(type) {
+            const dineInBtn = document.getElementById('dineInBtn');
+            const takeAwayBtn = document.getElementById('takeAwayBtn');
+            
+            if (type === 'dinein') {
+                dineInBtn.className = 'px-3 py-1.5 rounded-md bg-white text-brand-black font-bold shadow-sm border border-gray-300 transition-all';
+                takeAwayBtn.className = 'px-3 py-1.5 rounded-md text-gray-500 hover:text-brand-black font-semibold transition-all';
+                orderType = 'dine_in';
+            } else {
+                dineInBtn.className = 'px-3 py-1.5 rounded-md text-gray-500 hover:text-brand-black font-semibold transition-all';
+                takeAwayBtn.className = 'px-3 py-1.5 rounded-md bg-white text-brand-black font-bold shadow-sm border border-gray-300 transition-all';
+                orderType = 'take_away';
+                selectedTableId = null;
+                selectedTableName = null;
+                localStorage.removeItem('selectedTableId');
+                localStorage.removeItem('selectedTableName');
+            }
+            updateSelectedTableDisplay();
+        }
+
+        // Sidebar toggle functionality
+        const sidebar = document.getElementById('sidebar');
+        const sidebarToggle = document.getElementById('sidebarToggle');
+        const navTexts = document.querySelectorAll('.nav-text');
+        let isCollapsed = true;
+
+        // Apply collapsed state by default
+        sidebarToggle.innerHTML = '<i class="fa-solid fa-chevron-right"></i>';
+        navTexts.forEach(text => {
+            text.classList.add('hidden');
+        });
+        const navItems = document.querySelectorAll('#navigation a');
+        navItems.forEach(item => {
+            item.classList.add('justify-center');
+            item.classList.remove('gap-4');
+        });
+        const logoText = sidebar.querySelector('h1');
+        const logoSubtext = sidebar.querySelector('span.text-gray-500');
+        const logoDivider = sidebar.querySelectorAll('.h-px');
+        const logoSince = sidebar.querySelector('span.text-gray-400');
+        if (logoText) logoText.classList.add('hidden');
+        if (logoSubtext) logoSubtext.classList.add('hidden');
+        if (logoSince) logoSince.classList.add('hidden');
+        logoDivider.forEach(div => div.classList.add('hidden'));
+        const userName = sidebar.querySelector('.text-sm.font-medium');
+        if (userName) userName.classList.add('hidden');
+
+        sidebarToggle.addEventListener('click', () => {
+            isCollapsed = !isCollapsed;
+            
+            if (isCollapsed) {
+                sidebar.classList.remove('w-[240px]');
+                sidebar.classList.add('w-[80px]');
+                sidebarToggle.innerHTML = '<i class="fa-solid fa-chevron-right"></i>';
+                
+                navTexts.forEach(text => {
+                    text.classList.add('hidden');
+                });
+                
+                const navItems = document.querySelectorAll('#navigation a');
+                navItems.forEach(item => {
+                    item.classList.add('justify-center');
+                    item.classList.remove('gap-4');
+                });
+                
+                const logoText = sidebar.querySelector('h1');
+                const logoSubtext = sidebar.querySelector('span.text-gray-500');
+                const logoDivider = sidebar.querySelectorAll('.h-px');
+                const logoSince = sidebar.querySelector('span.text-gray-400');
+                
+                if (logoText) logoText.classList.add('hidden');
+                if (logoSubtext) logoSubtext.classList.add('hidden');
+                if (logoSince) logoSince.classList.add('hidden');
+                logoDivider.forEach(div => div.classList.add('hidden'));
+                
+                const userName = sidebar.querySelector('.text-sm.font-medium');
+                if (userName) userName.classList.add('hidden');
+                
+            } else {
+                sidebar.classList.remove('w-[80px]');
+                sidebar.classList.add('w-[240px]');
+                sidebarToggle.innerHTML = '<i class="fa-solid fa-bars"></i>';
+                
+                navTexts.forEach(text => {
+                    text.classList.remove('hidden');
+                });
+                
+                const navItems = document.querySelectorAll('#navigation a');
+                navItems.forEach(item => {
+                    item.classList.remove('justify-center');
+                    item.classList.add('gap-4');
+                });
+                
+                const logoText = sidebar.querySelector('h1');
+                const logoSubtext = sidebar.querySelector('span.text-gray-500');
+                const logoDivider = sidebar.querySelectorAll('.h-px');
+                const logoSince = sidebar.querySelector('span.text-gray-400');
+                
+                if (logoText) logoText.classList.remove('hidden');
+                if (logoSubtext) logoSubtext.classList.remove('hidden');
+                if (logoSince) logoSince.classList.remove('hidden');
+                logoDivider.forEach(div => div.classList.remove('hidden'));
+                
+                const userName = sidebar.querySelector('.text-sm.font-medium');
+                if (userName) userName.classList.remove('hidden');
+            }
+        });
+    </script>
+</body>
+</html>
