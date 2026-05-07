@@ -418,7 +418,7 @@ $users = $stmt->fetchAll();
         const sidebar = document.getElementById('sidebar');
         const sidebarToggle = document.getElementById('sidebarToggle');
         const navTexts = document.querySelectorAll('.nav-text');
-        let isCollapsed = true;
+        let isCollapsed = localStorage.getItem('sidebarCollapsed') !== 'false';
 
         // Apply collapsed state by default
         sidebarToggle.innerHTML = '<i class="fa-solid fa-chevron-right"></i>';
@@ -441,8 +441,25 @@ $users = $stmt->fetchAll();
         const userName = sidebar.querySelector('.text-sm.font-medium');
         if (userName) userName.classList.add('hidden');
 
+        if (!isCollapsed) {
+            sidebar.classList.remove('w-[80px]');
+            sidebar.classList.add('w-[240px]');
+            sidebarToggle.innerHTML = '<i class="fa-solid fa-bars"></i>';
+            navTexts.forEach(text => text.classList.remove('hidden'));
+            navItems.forEach(item => {
+                item.classList.remove('justify-center');
+                item.classList.add('gap-4');
+            });
+            if (logoText) logoText.classList.remove('hidden');
+            if (logoSubtext) logoSubtext.classList.remove('hidden');
+            if (logoSince) logoSince.classList.remove('hidden');
+            logoDivider.forEach(div => div.classList.remove('hidden'));
+            if (userName) userName.classList.remove('hidden');
+        }
+
         sidebarToggle.addEventListener('click', () => {
             isCollapsed = !isCollapsed;
+            localStorage.setItem('sidebarCollapsed', String(isCollapsed));
             
             if (isCollapsed) {
                 sidebar.classList.remove('w-[240px]');

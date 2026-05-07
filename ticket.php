@@ -13,6 +13,14 @@ if (!hasCashierAccess()) {
 
 // Get current user info
 $currentUser = getCurrentUser();
+$allowedTicketFilters = ['active', 'completed', 'all'];
+$ticketFilter = $_GET['filter'] ?? ($_SESSION['ticket_filter'] ?? 'active');
+if (!in_array($ticketFilter, $allowedTicketFilters, true)) {
+    $ticketFilter = 'active';
+}
+$_SESSION['ticket_filter'] = $ticketFilter;
+$activeTabClass = 'px-3 py-1.5 rounded-md bg-brand-light text-brand-dark font-bold border border-brand/20 shadow-sm transition-all';
+$inactiveTabClass = 'px-3 py-1.5 rounded-md text-gray-500 hover:text-brand-black font-semibold transition-all';
 
 // Get active tickets (orders)
 $stmt = $pdo->prepare("SELECT o.*, t.table_number, u.full_name as cashier_name 
@@ -153,19 +161,20 @@ $completedTickets = $stmt->fetchAll();
                 
                 <div class="flex items-center gap-3">
                     <div class="flex items-center bg-white border border-gray-200 rounded-lg p-1 shadow-sm text-sm">
-                        <button class="px-3 py-1.5 rounded-md bg-brand-light text-brand-dark font-bold border border-brand/20 shadow-sm transition-all">Active</button>
-                        <button class="px-3 py-1.5 rounded-md text-gray-500 hover:text-brand-black font-semibold transition-all">Completed</button>
-                        <button class="px-3 py-1.5 rounded-md text-gray-500 hover:text-brand-black font-semibold transition-all">All</button>
+                        <a href="ticket.php?filter=active" class="<?php echo $ticketFilter === 'active' ? $activeTabClass : $inactiveTabClass; ?>">Active</a>
+                        <a href="ticket.php?filter=completed" class="<?php echo $ticketFilter === 'completed' ? $activeTabClass : $inactiveTabClass; ?>">Completed</a>
+                        <a href="ticket.php?filter=all" class="<?php echo $ticketFilter === 'all' ? $activeTabClass : $inactiveTabClass; ?>">All</a>
                     </div>
                 </div>
             </header>
 
             <div class="flex-1 overflow-y-auto px-8 pb-8 pt-6">
                 <!-- Active Tickets -->
+                <?php if ($ticketFilter === 'active' || $ticketFilter === 'all'): ?>
                 <h3 class="text-lg font-serif font-bold text-brand-black mb-4">Active Tickets</h3>
-                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+                <div class="columns-1 md:columns-2 lg:columns-3 gap-6 mb-8">
                     <?php foreach ($activeTickets as $ticket): ?>
-                    <div class="bg-white rounded-2xl border-2 <?php echo $ticket['status'] === 'processing' ? 'border-brand' : 'border-gray-200'; ?> p-5 shadow-sm hover:shadow-md transition-all">
+                    <div class="break-inside-avoid mb-6 bg-white rounded-2xl border-2 <?php echo $ticket['status'] === 'processing' ? 'border-brand' : 'border-gray-200'; ?> p-5 shadow-sm hover:shadow-md transition-all">
                         <div class="flex items-center justify-between mb-4">
                             <div class="flex items-center gap-3">
                                 <div class="w-12 h-12 rounded-full <?php echo $ticket['status'] === 'processing' ? 'bg-brand text-brand-black' : 'bg-gray-100 text-gray-600'; ?> flex items-center justify-center font-bold text-lg">
@@ -205,7 +214,7 @@ $completedTickets = $stmt->fetchAll();
                         <div class="flex justify-between items-center pt-3 border-t border-gray-100">
                             <span class="font-bold text-brand-black"><?php echo formatCurrency($ticket['total_amount']); ?></span>
                             <div class="flex gap-2">
-                                <button class="px-3 py-1.5 bg-brand-light text-brand-dark rounded-lg text-xs font-bold hover:bg-brand hover:text-brand-black transition-colors">View</button>
+                                <button onclick="viewOrder(<?php echo (int)$ticket['id']; ?>)" class="px-3 py-1.5 bg-brand-light text-brand-dark rounded-lg text-xs font-bold hover:bg-brand hover:text-brand-black transition-colors">View</button>
                                 <button onclick="completeOrder(<?php echo (int)$ticket['id']; ?>)" class="px-3 py-1.5 bg-brand-black text-brand rounded-lg text-xs font-bold hover:bg-gray-800 transition-colors">Complete</button>
                             </div>
                         </div>
@@ -219,8 +228,10 @@ $completedTickets = $stmt->fetchAll();
                     </div>
                     <?php endif; ?>
                 </div>
+                <?php endif; ?>
 
                 <!-- Completed Tickets -->
+                <?php if ($ticketFilter === 'completed' || $ticketFilter === 'all'): ?>
                 <h3 class="text-lg font-serif font-bold text-brand-black mb-4">Completed Today</h3>
                 <div class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
                     <table class="w-full text-left border-collapse">
@@ -243,7 +254,7 @@ $completedTickets = $stmt->fetchAll();
                                 <td class="py-4 px-6 text-sm text-gray-600"><?php echo date('h:i A', strtotime($ticket['created_at'])); ?></td>
                                 <td class="py-4 px-6 font-serif font-bold text-brand-black"><?php echo formatCurrency($ticket['total_amount']); ?></td>
                                 <td class="py-4 px-6 text-center">
-                                    <button class="text-gray-400 hover:text-brand-black transition-colors"><i class="fa-regular fa-eye"></i></button>
+                                    <button onclick="viewOrder(<?php echo (int)$ticket['id']; ?>)" class="text-gray-400 hover:text-brand-black transition-colors"><i class="fa-regular fa-eye"></i></button>
                                 </td>
                             </tr>
                             <?php endforeach; ?>
@@ -256,6 +267,7 @@ $completedTickets = $stmt->fetchAll();
                         </tbody>
                     </table>
                 </div>
+                <?php endif; ?>
             </div>
         </main>
 
@@ -280,6 +292,61 @@ $completedTickets = $stmt->fetchAll();
         </div>
     </div>
 
+    <!-- Ticket Details Modal -->
+    <div id="ticketDetailsModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-2xl max-w-lg w-full mx-4 shadow-2xl border border-gray-200 max-h-[90vh] overflow-hidden flex flex-col">
+            <div class="p-6 border-b border-gray-100 flex items-start justify-between gap-4">
+                <div>
+                    <p id="ticketDetailsOrderNumber" class="text-xs font-bold text-gray-500 uppercase tracking-wider">Order</p>
+                    <h3 id="ticketDetailsCustomer" class="text-2xl font-serif font-bold text-brand-black mt-1">Ticket Details</h3>
+                    <p id="ticketDetailsMeta" class="text-sm text-gray-500 mt-1"></p>
+                </div>
+                <button type="button" onclick="hideTicketDetailsModal()" class="w-9 h-9 rounded-full bg-gray-100 text-gray-500 hover:text-brand-black hover:bg-gray-200 transition-colors shrink-0">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <div class="p-6 overflow-y-auto">
+                <div class="grid grid-cols-2 gap-3 mb-5">
+                    <div class="bg-gray-50 border border-gray-200 rounded-xl p-3">
+                        <p class="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Status</p>
+                        <p id="ticketDetailsStatus" class="text-sm font-bold text-brand-black mt-1">-</p>
+                    </div>
+                    <div class="bg-gray-50 border border-gray-200 rounded-xl p-3">
+                        <p class="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Payment</p>
+                        <p id="ticketDetailsPayment" class="text-sm font-bold text-brand-black mt-1">-</p>
+                    </div>
+                </div>
+
+                <div id="ticketDetailsItems" class="space-y-3 mb-5"></div>
+
+                <div class="border-t border-gray-200 pt-4 space-y-2">
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-600">Subtotal</span>
+                        <span id="ticketDetailsSubtotal" class="font-bold text-brand-black">-</span>
+                    </div>
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-600">Tax</span>
+                        <span id="ticketDetailsTax" class="font-bold text-brand-black">-</span>
+                    </div>
+                    <div class="flex justify-between text-lg pt-2 border-t border-gray-100">
+                        <span class="font-bold text-brand-black">Total</span>
+                        <span id="ticketDetailsTotal" class="font-bold text-brand-black">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="p-6 border-t border-gray-100 bg-gray-50 flex gap-3">
+                <button type="button" onclick="hideTicketDetailsModal()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">
+                    Close
+                </button>
+                <button id="ticketDetailsCompleteButton" type="button" class="flex-1 bg-brand-black text-brand py-3 rounded-xl font-bold hover:bg-gray-800 transition-colors hidden">
+                    Complete
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script>
         function showLogoutModal() {
             document.getElementById('logoutModal').classList.remove('hidden');
@@ -287,6 +354,94 @@ $completedTickets = $stmt->fetchAll();
         
         function hideLogoutModal() {
             document.getElementById('logoutModal').classList.add('hidden');
+        }
+
+        function formatPeso(amount) {
+            return new Intl.NumberFormat('en-PH', {
+                style: 'currency',
+                currency: 'PHP',
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }).format(Number(amount) || 0);
+        }
+
+        function formatOrderType(type) {
+            return type === 'dine_in' ? 'Dine In' : type === 'take_away' ? 'Take Out' : 'Delivery';
+        }
+
+        function formatPaymentMethod(method) {
+            if (method === 'gcash') return 'GCash';
+            return method ? method.charAt(0).toUpperCase() + method.slice(1) : '-';
+        }
+
+        function escapeHtml(value) {
+            const div = document.createElement('div');
+            div.textContent = value || '';
+            return div.innerHTML;
+        }
+
+        function hideTicketDetailsModal() {
+            document.getElementById('ticketDetailsModal').classList.add('hidden');
+        }
+
+        function viewOrder(orderId) {
+            const modal = document.getElementById('ticketDetailsModal');
+            const itemsContainer = document.getElementById('ticketDetailsItems');
+            const completeButton = document.getElementById('ticketDetailsCompleteButton');
+
+            itemsContainer.innerHTML = '<p class="text-center text-sm text-gray-400 py-6">Loading ticket...</p>';
+            completeButton.classList.add('hidden');
+            completeButton.onclick = null;
+            modal.classList.remove('hidden');
+
+            fetch('api.php?action=get_order_details&order_id=' + encodeURIComponent(orderId))
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.success) {
+                        itemsContainer.innerHTML = '<p class="text-center text-sm text-red-600 py-6">' + (data.error || 'Unable to load ticket.') + '</p>';
+                        return;
+                    }
+
+                    const order = data.data.order;
+                    const items = data.data.items || [];
+                    const tableLabel = order.table_number ? 'Table ' + order.table_number : 'Take Out';
+                    const createdAt = new Date(order.created_at.replace(' ', 'T'));
+
+                    document.getElementById('ticketDetailsOrderNumber').textContent = 'Order #' + order.order_number;
+                    document.getElementById('ticketDetailsCustomer').textContent = order.customer_name || 'Guest';
+                    document.getElementById('ticketDetailsMeta').textContent = tableLabel + ' · ' + formatOrderType(order.order_type) + ' · ' + createdAt.toLocaleString([], {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: 'numeric',
+                        minute: '2-digit'
+                    });
+                    document.getElementById('ticketDetailsStatus').textContent = order.status;
+                    document.getElementById('ticketDetailsPayment').textContent = formatPaymentMethod(order.payment_method);
+                    document.getElementById('ticketDetailsSubtotal').textContent = formatPeso(order.subtotal);
+                    document.getElementById('ticketDetailsTax').textContent = formatPeso(order.tax_amount);
+                    document.getElementById('ticketDetailsTotal').textContent = formatPeso(order.total_amount);
+
+                    itemsContainer.innerHTML = items.map(item => `
+                        <div class="flex justify-between gap-4 rounded-xl border border-gray-200 bg-white p-3">
+                            <div>
+                                <p class="font-bold text-sm text-brand-black">${escapeHtml(item.name)}</p>
+                                <p class="text-xs text-gray-500 mt-1">${formatPeso(item.unit_price)} each</p>
+                            </div>
+                            <div class="text-right">
+                                <p class="text-sm font-bold text-brand-black">${item.quantity}x</p>
+                                <p class="text-xs text-gray-500 mt-1">${formatPeso(item.total_price)}</p>
+                            </div>
+                        </div>
+                    `).join('') || '<p class="text-center text-sm text-gray-400 py-6">No items found</p>';
+
+                    if (order.status === 'pending' || order.status === 'processing') {
+                        completeButton.classList.remove('hidden');
+                        completeButton.onclick = () => completeOrder(Number(order.id));
+                    }
+                })
+                .catch(() => {
+                    itemsContainer.innerHTML = '<p class="text-center text-sm text-red-600 py-6">Unable to load ticket.</p>';
+                });
         }
 
         function completeOrder(orderId) {
@@ -318,7 +473,7 @@ $completedTickets = $stmt->fetchAll();
         const sidebar = document.getElementById('sidebar');
         const sidebarToggle = document.getElementById('sidebarToggle');
         const navTexts = document.querySelectorAll('.nav-text');
-        let isCollapsed = true;
+        let isCollapsed = localStorage.getItem('sidebarCollapsed') !== 'false';
 
         // Apply collapsed state by default
         sidebarToggle.innerHTML = '<i class="fa-solid fa-chevron-right"></i>';
@@ -341,8 +496,25 @@ $completedTickets = $stmt->fetchAll();
         const userName = sidebar.querySelector('.text-sm.font-medium');
         if (userName) userName.classList.add('hidden');
 
+        if (!isCollapsed) {
+            sidebar.classList.remove('w-[80px]');
+            sidebar.classList.add('w-[240px]');
+            sidebarToggle.innerHTML = '<i class="fa-solid fa-bars"></i>';
+            navTexts.forEach(text => text.classList.remove('hidden'));
+            navItems.forEach(item => {
+                item.classList.remove('justify-center');
+                item.classList.add('gap-4');
+            });
+            if (logoText) logoText.classList.remove('hidden');
+            if (logoSubtext) logoSubtext.classList.remove('hidden');
+            if (logoSince) logoSince.classList.remove('hidden');
+            logoDivider.forEach(div => div.classList.remove('hidden'));
+            if (userName) userName.classList.remove('hidden');
+        }
+
         sidebarToggle.addEventListener('click', () => {
             isCollapsed = !isCollapsed;
+            localStorage.setItem('sidebarCollapsed', String(isCollapsed));
             
             if (isCollapsed) {
                 sidebar.classList.remove('w-[240px]');

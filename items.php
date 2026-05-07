@@ -25,13 +25,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $price = (float)$_POST['price'];
         $image_url = sanitize($_POST['image_url']);
         $temperature = sanitize($_POST['temperature']);
+        $quantity = max(0, (int)($_POST['quantity'] ?? 0));
         $is_best_seller = isset($_POST['is_best_seller']) ? 1 : 0;
         $is_available = isset($_POST['is_available']) ? 1 : 0;
         
         try {
-            $stmt = $pdo->prepare("INSERT INTO menu_items (category_id, name, description, price, image_url, temperature, is_best_seller, is_available) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-            $stmt->execute([$category_id, $name, $description, $price, $image_url, $temperature, $is_best_seller, $is_available]);
-            $success = 'Item added successfully!';
+            $stmt = $pdo->prepare("INSERT INTO menu_items (category_id, name, description, price, image_url, temperature, is_best_seller, is_available, quantity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt->execute([$category_id, $name, $description, $price, $image_url, $temperature, $is_best_seller, $is_available, $quantity]);
+            redirect('items.php?category=' . $category_id);
         } catch (PDOException $e) {
             $error = 'Failed to add item: ' . $e->getMessage();
         }
@@ -43,24 +44,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $price = (float)$_POST['price'];
         $image_url = sanitize($_POST['image_url']);
         $temperature = sanitize($_POST['temperature']);
+        $quantity = max(0, (int)($_POST['quantity'] ?? 0));
         $is_best_seller = isset($_POST['is_best_seller']) ? 1 : 0;
         $is_available = isset($_POST['is_available']) ? 1 : 0;
         
         try {
-            $stmt = $pdo->prepare("UPDATE menu_items SET category_id = ?, name = ?, description = ?, price = ?, image_url = ?, temperature = ?, is_best_seller = ?, is_available = ? WHERE id = ?");
-            $stmt->execute([$category_id, $name, $description, $price, $image_url, $temperature, $is_best_seller, $is_available, $id]);
-            $success = 'Item updated successfully!';
+            $stmt = $pdo->prepare("UPDATE menu_items SET category_id = ?, name = ?, description = ?, price = ?, image_url = ?, temperature = ?, quantity = ?, is_best_seller = ?, is_available = ? WHERE id = ?");
+            $stmt->execute([$category_id, $name, $description, $price, $image_url, $temperature, $quantity, $is_best_seller, $is_available, $id]);
+            redirect('items.php?category=' . $category_id);
         } catch (PDOException $e) {
             $error = 'Failed to update item: ' . $e->getMessage();
         }
     } elseif ($action === 'delete_item') {
         $id = (int)$_POST['item_id'];
         try {
-            $stmt = $pdo->prepare("DELETE FROM menu_items WHERE id = ?");
+            $stmt = $pdo->prepare("UPDATE menu_items SET is_available = 0 WHERE id = ?");
             $stmt->execute([$id]);
-            $success = 'Item deleted successfully!';
+            redirect('items.php');
         } catch (PDOException $e) {
-            $error = 'Failed to delete item: ' . $e->getMessage();
+            $error = 'Failed to archive item: ' . $e->getMessage();
+        }
+    } elseif ($action === 'restock_item') {
+        $id = (int)$_POST['item_id'];
+        $quantity = max(0, (int)$_POST['quantity']);
+        try {
+            $stmt = $pdo->prepare("UPDATE menu_items SET quantity = ? WHERE id = ?");
+            $stmt->execute([$quantity, $id]);
+            redirect('items.php');
+        } catch (PDOException $e) {
+            $error = 'Failed to update stock: ' . $e->getMessage();
         }
     } elseif ($action === 'add_category') {
         $name = sanitize($_POST['category_name']);
@@ -83,17 +95,62 @@ $categories = $stmt->fetchAll();
 
 // Get selected category (default to first category or 'all')
 $selectedCategoryId = isset($_GET['category']) ? (int)$_GET['category'] : 0;
+$searchTerm = sanitize($_GET['search'] ?? '');
+$stockFilter = $_GET['filter'] ?? 'all';
+$allowedStockFilters = ['all', 'available', 'unavailable', 'best_seller', 'low_stock', 'out_of_stock'];
+if (!in_array($stockFilter, $allowedStockFilters, true)) {
+    $stockFilter = 'all';
+}
+$viewMode = $_GET['view'] ?? 'grid';
+if (!in_array($viewMode, ['grid', 'list'], true)) {
+    $viewMode = 'grid';
+}
+$lowStockThreshold = 5;
+
+function itemsUrl(array $overrides = []) {
+    $params = array_merge($_GET, $overrides);
+    foreach ($params as $key => $value) {
+        if ($value === '' || $value === null || ($key === 'category' && (int)$value === 0) || ($key === 'filter' && $value === 'all') || ($key === 'view' && $value === 'grid')) {
+            unset($params[$key]);
+        }
+    }
+    return 'items.php' . (empty($params) ? '' : '?' . http_build_query($params));
+}
 
 // Get menu items
+$where = [];
+$params = [];
 if ($selectedCategoryId > 0) {
-    $stmt = $pdo->prepare("SELECT mi.*, c.name as category_name FROM menu_items mi JOIN categories c ON mi.category_id = c.id WHERE mi.category_id = ? ORDER BY mi.sort_order ASC");
-    $stmt->execute([$selectedCategoryId]);
-    $menuItems = $stmt->fetchAll();
-    $categoryName = $categories[array_search($selectedCategoryId, array_column($categories, 'id'))]['name'] ?? 'Items';
-} else {
-    $stmt = $pdo->query("SELECT mi.*, c.name as category_name FROM menu_items mi JOIN categories c ON mi.category_id = c.id ORDER BY mi.category_id, mi.sort_order ASC");
-    $menuItems = $stmt->fetchAll();
-    $categoryName = 'All Dishes';
+    $where[] = 'mi.category_id = ?';
+    $params[] = $selectedCategoryId;
+}
+if ($searchTerm !== '') {
+    $where[] = '(mi.name LIKE ? OR mi.description LIKE ? OR c.name LIKE ?)';
+    $searchLike = '%' . $searchTerm . '%';
+    array_push($params, $searchLike, $searchLike, $searchLike);
+}
+if ($stockFilter === 'available') {
+    $where[] = 'mi.is_available = 1';
+} elseif ($stockFilter === 'unavailable') {
+    $where[] = 'mi.is_available = 0';
+} elseif ($stockFilter === 'best_seller') {
+    $where[] = 'mi.is_best_seller = 1';
+} elseif ($stockFilter === 'low_stock') {
+    $where[] = 'mi.quantity > 0 AND mi.quantity <= ?';
+    $params[] = $lowStockThreshold;
+} elseif ($stockFilter === 'out_of_stock') {
+    $where[] = 'mi.quantity <= 0';
+}
+$whereSql = empty($where) ? '' : 'WHERE ' . implode(' AND ', $where);
+$stmt = $pdo->prepare("SELECT mi.*, c.name as category_name FROM menu_items mi JOIN categories c ON mi.category_id = c.id {$whereSql} ORDER BY mi.category_id, mi.sort_order ASC, mi.name ASC");
+$stmt->execute($params);
+$menuItems = $stmt->fetchAll();
+$categoryName = 'All Dishes';
+foreach ($categories as $category) {
+    if ((int)$category['id'] === $selectedCategoryId) {
+        $categoryName = $category['name'];
+        break;
+    }
 }
 
 // Get category item counts
@@ -225,12 +282,20 @@ $totalItems = array_sum($categoryCounts);
                     <h2 class="text-2xl font-serif font-bold text-brand-black tracking-wide">MANAGE FOOD ITEMS</h2>
                 </div>
                 
-                <div class="flex items-center justify-between mb-4 flex-1 max-w-2xl">
+                <div class="flex items-center justify-between gap-4 flex-1 max-w-2xl">
                     <!-- Search Bar -->
-                    <div class="flex-1 relative max-w-md">
+                    <form method="GET" action="items.php" class="flex-1 relative max-w-md">
+                        <input type="hidden" name="category" value="<?php echo (int)$selectedCategoryId; ?>">
+                        <input type="hidden" name="filter" value="<?php echo htmlspecialchars($stockFilter); ?>">
+                        <input type="hidden" name="view" value="<?php echo htmlspecialchars($viewMode); ?>">
                         <i class="fa-solid fa-search absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"></i>
-                        <input type="text" placeholder="Search dishes..." class="w-full bg-white h-11 rounded-full pl-12 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-brand shadow-sm border border-gray-200">
-                    </div>
+                        <input type="text" name="search" value="<?php echo htmlspecialchars($searchTerm); ?>" placeholder="Search dishes..." class="w-full bg-white h-11 rounded-full pl-12 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-brand shadow-sm border border-gray-200">
+                        <?php if ($searchTerm !== ''): ?>
+                        <a href="<?php echo itemsUrl(['search' => '']); ?>" class="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-brand-black transition-colors">
+                            <i class="fa-solid fa-xmark"></i>
+                        </a>
+                        <?php endif; ?>
+                    </form>
                     
                     <!-- Action Button -->
                     <button onclick="showAddItemModal()" class="bg-brand-black text-brand px-6 py-2.5 rounded-full font-bold text-sm shadow-[2px_2px_0px_0px_rgba(251,191,36,1)] hover:bg-gray-800 transition-all active:translate-y-0.5 active:translate-x-0.5 active:shadow-none uppercase tracking-wide border border-transparent">
@@ -252,7 +317,7 @@ $totalItems = array_sum($categoryCounts);
                     <div class="flex-1 overflow-y-auto p-3 space-y-1.5 hide-scrollbar">
                         
                         <!-- All Dishes -->
-                        <button onclick="selectCategory(0)" class="w-full flex items-center justify-between p-3 rounded-xl <?php echo $selectedCategoryId == 0 ? 'bg-brand-light border-2 border-brand shadow-sm' : 'hover:bg-gray-50 border border-transparent'; ?> transition-all group">
+                        <button onclick="window.location.href='<?php echo itemsUrl(['category' => 0]); ?>'" class="w-full flex items-center justify-between p-3 rounded-xl <?php echo $selectedCategoryId == 0 ? 'bg-brand-light border-2 border-brand shadow-sm' : 'hover:bg-gray-50 border border-transparent'; ?> transition-all group">
                             <div class="flex items-center gap-3 text-sm font-bold <?php echo $selectedCategoryId == 0 ? 'text-brand-black font-serif' : 'text-gray-600 group-hover:text-brand-black'; ?>">
                                 <i class="fa-solid fa-layer-group w-5 <?php echo $selectedCategoryId == 0 ? 'text-brand-dark' : 'text-gray-400 group-hover:text-brand-black'; ?>"></i>
                                 All Dishes
@@ -261,7 +326,7 @@ $totalItems = array_sum($categoryCounts);
                         </button>
 
                         <?php foreach ($categories as $category): ?>
-                        <button onclick="selectCategory(<?php echo $category['id']; ?>)" class="w-full flex items-center justify-between p-3 rounded-xl <?php echo $selectedCategoryId == $category['id'] ? 'bg-brand-light border-2 border-brand shadow-sm' : 'hover:bg-gray-50 border border-transparent'; ?> transition-all group">
+                        <button onclick="window.location.href='<?php echo itemsUrl(['category' => (int)$category['id']]); ?>'" class="w-full flex items-center justify-between p-3 rounded-xl <?php echo $selectedCategoryId == $category['id'] ? 'bg-brand-light border-2 border-brand shadow-sm' : 'hover:bg-gray-50 border border-transparent'; ?> transition-all group">
                             <div class="flex items-center gap-3 text-sm font-bold <?php echo $selectedCategoryId == $category['id'] ? 'text-brand-black font-serif' : 'text-gray-600 group-hover:text-brand-black'; ?>">
                                 <i class="<?php echo htmlspecialchars($category['icon']); ?> w-5 <?php echo $selectedCategoryId == $category['id'] ? 'text-brand-dark' : 'text-gray-400 group-hover:text-brand-black'; ?>"></i>
                                 <?php echo htmlspecialchars($category['name']); ?>
@@ -294,18 +359,81 @@ $totalItems = array_sum($categoryCounts);
                             </button>
                             <!-- View Toggles -->
                             <div class="flex bg-white border border-gray-200 rounded-lg p-1 shadow-sm">
-                                <button class="w-8 h-8 rounded text-brand border border-brand bg-brand-light flex items-center justify-center"><i class="fa-solid fa-border-all"></i></button>
-                                <button class="w-8 h-8 rounded text-gray-400 hover:text-brand-black flex items-center justify-center"><i class="fa-solid fa-list-ul"></i></button>
+                                <a href="<?php echo itemsUrl(['view' => 'grid']); ?>" class="w-8 h-8 rounded <?php echo $viewMode === 'grid' ? 'text-brand border border-brand bg-brand-light' : 'text-gray-400 hover:text-brand-black'; ?> flex items-center justify-center"><i class="fa-solid fa-border-all"></i></a>
+                                <a href="<?php echo itemsUrl(['view' => 'list']); ?>" class="w-8 h-8 rounded <?php echo $viewMode === 'list' ? 'text-brand border border-brand bg-brand-light' : 'text-gray-400 hover:text-brand-black'; ?> flex items-center justify-center"><i class="fa-solid fa-list-ul"></i></a>
                             </div>
                             <!-- Filter -->
-                            <button class="bg-white border border-gray-200 shadow-sm px-4 py-2 rounded-lg text-sm font-bold text-gray-600 hover:text-brand-black transition-colors flex items-center gap-2">
-                                <i class="fa-solid fa-sliders"></i> Filter
-                            </button>
+                            <select onchange="window.location.href=this.value" class="bg-white border border-gray-200 shadow-sm px-3 py-2 rounded-lg text-sm font-bold text-gray-600 hover:text-brand-black transition-colors focus:outline-none focus:ring-2 focus:ring-brand">
+                                <option value="<?php echo itemsUrl(['filter' => 'all']); ?>" <?php echo $stockFilter === 'all' ? 'selected' : ''; ?>>All Items</option>
+                                <option value="<?php echo itemsUrl(['filter' => 'available']); ?>" <?php echo $stockFilter === 'available' ? 'selected' : ''; ?>>Available</option>
+                                <option value="<?php echo itemsUrl(['filter' => 'unavailable']); ?>" <?php echo $stockFilter === 'unavailable' ? 'selected' : ''; ?>>Unavailable</option>
+                                <option value="<?php echo itemsUrl(['filter' => 'best_seller']); ?>" <?php echo $stockFilter === 'best_seller' ? 'selected' : ''; ?>>Best Seller</option>
+                                <option value="<?php echo itemsUrl(['filter' => 'low_stock']); ?>" <?php echo $stockFilter === 'low_stock' ? 'selected' : ''; ?>>Low Stock</option>
+                                <option value="<?php echo itemsUrl(['filter' => 'out_of_stock']); ?>" <?php echo $stockFilter === 'out_of_stock' ? 'selected' : ''; ?>>Out of Stock</option>
+                            </select>
                         </div>
                     </div>
 
                     <!-- Scrollable Grid Area -->
                     <div class="flex-1 overflow-y-auto pb-10 px-2 hide-scrollbar">
+                        <?php if ($viewMode === 'list'): ?>
+                        <div class="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
+                            <table class="w-full text-left border-collapse">
+                                <thead>
+                                    <tr class="bg-gray-50 border-b border-gray-200">
+                                        <th class="py-3 px-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Dish</th>
+                                        <th class="py-3 px-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Category</th>
+                                        <th class="py-3 px-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Price</th>
+                                        <th class="py-3 px-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Stock</th>
+                                        <th class="py-3 px-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Status</th>
+                                        <th class="py-3 px-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-100">
+                                    <?php foreach ($menuItems as $item): ?>
+                                    <?php
+                                        $quantity = (int)($item['quantity'] ?? 0);
+                                        $isOut = $quantity <= 0;
+                                        $isLow = $quantity > 0 && $quantity <= $lowStockThreshold;
+                                    ?>
+                                    <tr class="hover:bg-gray-50 transition-colors">
+                                        <td class="py-3 px-4">
+                                            <div class="flex items-center gap-3">
+                                                <img src="<?php echo htmlspecialchars($item['image_url']); ?>" alt="<?php echo htmlspecialchars($item['name']); ?>" class="w-11 h-11 rounded-lg object-cover border border-gray-100">
+                                                <div>
+                                                    <p class="font-bold text-sm text-brand-black"><?php echo htmlspecialchars($item['name']); ?></p>
+                                                    <p class="text-xs text-gray-500"><?php echo htmlspecialchars($item['temperature']); ?></p>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td class="py-3 px-4 text-sm text-gray-600"><?php echo htmlspecialchars($item['category_name']); ?></td>
+                                        <td class="py-3 px-4 text-sm font-bold text-brand-black"><?php echo formatCurrency($item['price']); ?></td>
+                                        <td class="py-3 px-4">
+                                            <button onclick="showRestockModal(<?php echo (int)$item['id']; ?>, <?php echo $quantity; ?>)" class="text-sm font-bold <?php echo $isOut ? 'text-red-600' : ($isLow ? 'text-yellow-700' : 'text-gray-700'); ?> hover:underline">
+                                                <?php echo $quantity; ?>
+                                            </button>
+                                        </td>
+                                        <td class="py-3 px-4">
+                                            <div class="flex flex-wrap gap-1">
+                                                <?php if (!(int)$item['is_available']): ?><span class="text-[10px] font-bold px-2 py-1 rounded bg-gray-100 text-gray-600">Unavailable</span><?php endif; ?>
+                                                <?php if ((int)$item['is_best_seller']): ?><span class="text-[10px] font-bold px-2 py-1 rounded bg-brand-light text-brand-dark">Best Seller</span><?php endif; ?>
+                                                <?php if ($isOut): ?><span class="text-[10px] font-bold px-2 py-1 rounded bg-red-50 text-red-600">Out</span><?php elseif ($isLow): ?><span class="text-[10px] font-bold px-2 py-1 rounded bg-yellow-50 text-yellow-700">Low</span><?php endif; ?>
+                                            </div>
+                                        </td>
+                                        <td class="py-3 px-4 text-right">
+                                            <button onclick="showEditItemModal(<?php echo (int)$item['id']; ?>)" class="text-gray-400 hover:text-brand-black mr-3"><i class="fa-solid fa-pen text-sm"></i></button>
+                                            <button onclick="showRestockModal(<?php echo (int)$item['id']; ?>, <?php echo $quantity; ?>)" class="text-gray-400 hover:text-brand-black mr-3"><i class="fa-solid fa-boxes-stacked text-sm"></i></button>
+                                            <button onclick="confirmDelete(<?php echo (int)$item['id']; ?>)" class="text-gray-400 hover:text-red-500"><i class="fa-solid fa-box-archive text-sm"></i></button>
+                                        </td>
+                                    </tr>
+                                    <?php endforeach; ?>
+                                    <?php if (empty($menuItems)): ?>
+                                    <tr><td colspan="6" class="py-10 text-center text-gray-400 text-sm">No items found</td></tr>
+                                    <?php endif; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                        <?php else: ?>
                         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                             
                             <!-- Add New Dish Box -->
@@ -317,18 +445,29 @@ $totalItems = array_sum($categoryCounts);
                             </div>
 
                             <?php foreach ($menuItems as $item): ?>
+                            <?php
+                                $quantity = (int)($item['quantity'] ?? 0);
+                                $isOut = $quantity <= 0;
+                                $isLow = $quantity > 0 && $quantity <= $lowStockThreshold;
+                            ?>
                             <!-- Item Card -->
-                            <div class="bg-white border border-gray-200 rounded-2xl p-4 flex flex-col items-center justify-between min-h-[220px] shadow-sm hover:shadow-md transition-shadow relative">
+                            <div class="bg-white border <?php echo $isOut ? 'border-red-200' : ($isLow ? 'border-yellow-200' : 'border-gray-200'); ?> rounded-2xl p-4 flex flex-col items-center justify-between min-h-[240px] shadow-sm hover:shadow-md transition-shadow relative">
                                 <!-- Top tools -->
                                 <div class="w-full flex justify-between items-start mb-2">
                                     <input type="checkbox" class="custom-checkbox w-4 h-4 rounded border-gray-300">
                                     <div class="flex gap-1">
-                                        <button onclick="showEditItemModal(<?php echo $item['id']; ?>)" class="text-gray-400 hover:text-brand-black"><i class="fa-solid fa-pen text-sm"></i></button>
-                                        <button onclick="confirmDelete(<?php echo $item['id']; ?>)" class="text-gray-400 hover:text-red-500"><i class="fa-solid fa-trash text-sm"></i></button>
+                                        <button onclick="showEditItemModal(<?php echo (int)$item['id']; ?>)" class="text-gray-400 hover:text-brand-black"><i class="fa-solid fa-pen text-sm"></i></button>
+                                        <button onclick="showRestockModal(<?php echo (int)$item['id']; ?>, <?php echo $quantity; ?>)" class="text-gray-400 hover:text-brand-black"><i class="fa-solid fa-boxes-stacked text-sm"></i></button>
+                                        <button onclick="confirmDelete(<?php echo (int)$item['id']; ?>)" class="text-gray-400 hover:text-red-500"><i class="fa-solid fa-box-archive text-sm"></i></button>
                                     </div>
                                 </div>
+                                <div class="absolute top-10 left-4 right-4 flex flex-wrap gap-1 justify-center">
+                                    <?php if (!(int)$item['is_available']): ?><span class="text-[10px] font-bold px-2 py-1 rounded bg-gray-100 text-gray-600">Unavailable</span><?php endif; ?>
+                                    <?php if ((int)$item['is_best_seller']): ?><span class="text-[10px] font-bold px-2 py-1 rounded bg-brand-light text-brand-dark">Best Seller</span><?php endif; ?>
+                                    <?php if ($isOut): ?><span class="text-[10px] font-bold px-2 py-1 rounded bg-red-50 text-red-600">Out of Stock</span><?php elseif ($isLow): ?><span class="text-[10px] font-bold px-2 py-1 rounded bg-yellow-50 text-yellow-700">Low Stock</span><?php endif; ?>
+                                </div>
                                 <!-- Image -->
-                                <div class="w-24 h-24 rounded-full border border-gray-100 overflow-hidden shadow-sm mb-4">
+                                <div class="w-24 h-24 rounded-full border border-gray-100 overflow-hidden shadow-sm mb-4 mt-5">
                                     <img src="<?php echo htmlspecialchars($item['image_url']); ?>" alt="<?php echo htmlspecialchars($item['name']); ?>" class="w-full h-full object-cover">
                                 </div>
                                 <!-- Info -->
@@ -336,12 +475,19 @@ $totalItems = array_sum($categoryCounts);
                                     <span class="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-0.5"><?php echo htmlspecialchars($item['category_name']); ?></span>
                                     <h4 class="font-serif font-bold text-brand-black text-sm leading-tight line-clamp-1"><?php echo htmlspecialchars($item['name']); ?></h4>
                                     <span class="font-bold text-brand-black mt-1"><?php echo formatCurrency($item['price']); ?></span>
-                                    <span class="text-xs text-gray-500 mt-0.5">Qty: <?php echo $item['quantity'] ?? 0; ?></span>
+                                    <button onclick="showRestockModal(<?php echo (int)$item['id']; ?>, <?php echo $quantity; ?>)" class="text-xs <?php echo $isOut ? 'text-red-600 font-bold' : ($isLow ? 'text-yellow-700 font-bold' : 'text-gray-500'); ?> mt-0.5 text-left hover:underline">Qty: <?php echo $quantity; ?></button>
                                 </div>
                             </div>
                             <?php endforeach; ?>
 
                         </div>
+                        <?php if (empty($menuItems)): ?>
+                        <div class="text-center py-16 text-gray-400">
+                            <i class="fa-solid fa-magnifying-glass text-4xl mb-3"></i>
+                            <p class="text-sm font-medium">No items found</p>
+                        </div>
+                        <?php endif; ?>
+                        <?php endif; ?>
                     </div>
                 </div>
             </div>
@@ -354,7 +500,7 @@ $totalItems = array_sum($categoryCounts);
     <div id="addItemModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
         <div class="bg-white rounded-2xl p-6 max-w-lg w-full mx-4 shadow-2xl border border-gray-200 max-h-[90vh] overflow-y-auto">
             <h3 class="text-xl font-serif font-bold text-brand-black mb-4">Add New Dish</h3>
-            <form action="items.php" method="POST" class="space-y-4">
+            <form action="<?php echo htmlspecialchars(itemsUrl()); ?>" method="POST" class="space-y-4">
                 <input type="hidden" name="action" value="add_item">
                 
                 <div>
@@ -366,7 +512,7 @@ $totalItems = array_sum($categoryCounts);
                     <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Category</label>
                     <select name="category_id" required class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
                         <?php foreach ($categories as $cat): ?>
-                        <option value="<?php echo $cat['id']; ?>"><?php echo htmlspecialchars($cat['name']); ?></option>
+                        <option value="<?php echo $cat['id']; ?>" <?php echo (int)$cat['id'] === $selectedCategoryId ? 'selected' : ''; ?>><?php echo htmlspecialchars($cat['name']); ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
@@ -397,6 +543,7 @@ $totalItems = array_sum($categoryCounts);
                         <option value="hot">Hot</option>
                         <option value="iced">Iced</option>
                         <option value="both">Both</option>
+                        <option value="blended iced">Blended Iced</option>
                     </select>
                 </div>
                 
@@ -423,11 +570,108 @@ $totalItems = array_sum($categoryCounts);
         </div>
     </div>
 
+    <!-- Edit Item Modal -->
+    <div id="editItemModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-2xl p-6 max-w-lg w-full mx-4 shadow-2xl border border-gray-200 max-h-[90vh] overflow-y-auto">
+            <h3 class="text-xl font-serif font-bold text-brand-black mb-4">Edit Dish</h3>
+            <form action="<?php echo htmlspecialchars(itemsUrl()); ?>" method="POST" class="space-y-4">
+                <input type="hidden" name="action" value="update_item">
+                <input type="hidden" name="item_id" id="editItemId">
+
+                <div>
+                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Name</label>
+                    <input type="text" name="name" id="editItemName" required class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Category</label>
+                    <select name="category_id" id="editItemCategory" required class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                        <?php foreach ($categories as $cat): ?>
+                        <option value="<?php echo $cat['id']; ?>"><?php echo htmlspecialchars($cat['name']); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Price</label>
+                        <input type="number" step="0.01" name="price" id="editItemPrice" required class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Quantity</label>
+                        <input type="number" name="quantity" min="0" id="editItemQuantity" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Image URL</label>
+                    <input type="url" name="image_url" id="editItemImage" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Description</label>
+                    <textarea name="description" id="editItemDescription" rows="2" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand"></textarea>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Temperature</label>
+                    <select name="temperature" id="editItemTemperature" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                        <option value="hot">Hot</option>
+                        <option value="iced">Iced</option>
+                        <option value="both">Both</option>
+                        <option value="blended iced">Blended Iced</option>
+                    </select>
+                </div>
+
+                <div class="flex items-center gap-4">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" name="is_best_seller" id="editItemBestSeller" class="w-4 h-4 rounded border-gray-300">
+                        <span class="text-sm font-medium">Best Seller</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" name="is_available" id="editItemAvailable" class="w-4 h-4 rounded border-gray-300">
+                        <span class="text-sm font-medium">Available</span>
+                    </label>
+                </div>
+
+                <div class="flex gap-3 pt-4">
+                    <button type="button" onclick="hideEditItemModal()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">Cancel</button>
+                    <button type="submit" class="flex-1 bg-brand-black text-brand py-3 rounded-xl font-bold hover:bg-gray-800 transition-colors">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Restock Modal -->
+    <div id="restockModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl border border-gray-200">
+            <h3 class="text-xl font-serif font-bold text-brand-black mb-1">Update Stock</h3>
+            <p id="restockItemName" class="text-sm text-gray-500 mb-5">Set current quantity</p>
+            <form action="<?php echo htmlspecialchars(itemsUrl()); ?>" method="POST" class="space-y-4">
+                <input type="hidden" name="action" value="restock_item">
+                <input type="hidden" name="item_id" id="restockItemId">
+                <div>
+                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Current Quantity</label>
+                    <input type="number" name="quantity" min="0" id="restockQuantity" required class="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                </div>
+                <div class="grid grid-cols-3 gap-2">
+                    <button type="button" onclick="adjustRestock(5)" class="bg-gray-100 text-gray-700 py-2 rounded-xl text-sm font-bold hover:bg-gray-200">+5</button>
+                    <button type="button" onclick="adjustRestock(10)" class="bg-gray-100 text-gray-700 py-2 rounded-xl text-sm font-bold hover:bg-gray-200">+10</button>
+                    <button type="button" onclick="adjustRestock(20)" class="bg-gray-100 text-gray-700 py-2 rounded-xl text-sm font-bold hover:bg-gray-200">+20</button>
+                </div>
+                <div class="flex gap-3 pt-2">
+                    <button type="button" onclick="hideRestockModal()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">Cancel</button>
+                    <button type="submit" class="flex-1 bg-brand-black text-brand py-3 rounded-xl font-bold hover:bg-gray-800 transition-colors">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Add Category Modal -->
     <div id="addCategoryModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
         <div class="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-200">
             <h3 class="text-xl font-serif font-bold text-brand-black mb-4">Add New Category</h3>
-            <form action="items.php" method="POST" class="space-y-4">
+            <form action="<?php echo htmlspecialchars(itemsUrl()); ?>" method="POST" class="space-y-4">
                 <input type="hidden" name="action" value="add_category">
                 
                 <div>
@@ -530,10 +774,13 @@ $totalItems = array_sum($categoryCounts);
                                 <div class="w-8 h-8 bg-brand text-brand-black rounded-lg flex items-center justify-center text-sm">
                                     <i class="<?php echo htmlspecialchars($category['icon']); ?>"></i>
                                 </div>
-                                <span class="font-medium text-brand-black"><?php echo htmlspecialchars($category['name']); ?></span>
+                                <div>
+                                    <span class="font-medium text-brand-black"><?php echo htmlspecialchars($category['name']); ?></span>
+                                    <p class="text-xs text-gray-500"><?php echo (int)($categoryCounts[$category['id']] ?? 0); ?> items</p>
+                                </div>
                             </div>
                             <div class="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button onclick="editCategory(<?php echo $category['id']; ?>, '<?php echo htmlspecialchars($category['name']); ?>', '<?php echo htmlspecialchars($category['icon']); ?>')" class="text-gray-400 hover:text-brand-black">
+                                <button onclick='editCategory(<?php echo (int)$category['id']; ?>, <?php echo json_encode($category['name']); ?>, <?php echo json_encode($category['icon']); ?>)' class="text-gray-400 hover:text-brand-black">
                                     <i class="fa-solid fa-pen text-sm"></i>
                                 </button>
                                 <button onclick="deleteCategory(<?php echo $category['id']; ?>)" class="text-gray-400 hover:text-red-500">
@@ -563,6 +810,22 @@ $totalItems = array_sum($categoryCounts);
     </div>
 
     <script>
+        const itemsData = <?php echo json_encode(array_map(function ($item) {
+            return [
+                'id' => (int)$item['id'],
+                'category_id' => (int)$item['category_id'],
+                'name' => $item['name'],
+                'description' => $item['description'],
+                'price' => (float)$item['price'],
+                'image_url' => $item['image_url'],
+                'temperature' => $item['temperature'],
+                'quantity' => (int)($item['quantity'] ?? 0),
+                'is_best_seller' => (int)$item['is_best_seller'],
+                'is_available' => (int)$item['is_available'],
+            ];
+        }, $menuItems)); ?>;
+        const currentItemsUrl = <?php echo json_encode(itemsUrl()); ?>;
+
         function selectCategory(categoryId) {
             window.location.href = 'items.php?category=' + categoryId;
         }
@@ -575,6 +838,44 @@ $totalItems = array_sum($categoryCounts);
             document.getElementById('addItemModal').classList.add('hidden');
         }
 
+        function showEditItemModal(itemId) {
+            const item = itemsData.find(item => item.id === Number(itemId));
+            if (!item) return;
+
+            document.getElementById('editItemId').value = item.id;
+            document.getElementById('editItemName').value = item.name || '';
+            document.getElementById('editItemCategory').value = item.category_id;
+            document.getElementById('editItemPrice').value = item.price.toFixed(2);
+            document.getElementById('editItemQuantity').value = item.quantity;
+            document.getElementById('editItemImage').value = item.image_url || '';
+            document.getElementById('editItemDescription').value = item.description || '';
+            document.getElementById('editItemTemperature').value = item.temperature || 'both';
+            document.getElementById('editItemBestSeller').checked = item.is_best_seller === 1;
+            document.getElementById('editItemAvailable').checked = item.is_available === 1;
+            document.getElementById('editItemModal').classList.remove('hidden');
+        }
+
+        function hideEditItemModal() {
+            document.getElementById('editItemModal').classList.add('hidden');
+        }
+
+        function showRestockModal(itemId, quantity) {
+            const item = itemsData.find(item => item.id === Number(itemId));
+            document.getElementById('restockItemId').value = itemId;
+            document.getElementById('restockQuantity').value = Number(quantity) || 0;
+            document.getElementById('restockItemName').textContent = item ? item.name : 'Set current quantity';
+            document.getElementById('restockModal').classList.remove('hidden');
+        }
+
+        function hideRestockModal() {
+            document.getElementById('restockModal').classList.add('hidden');
+        }
+
+        function adjustRestock(amount) {
+            const input = document.getElementById('restockQuantity');
+            input.value = Math.max(0, (Number(input.value) || 0) + amount);
+        }
+
         function showAddCategoryModal() {
             document.getElementById('addCategoryModal').classList.remove('hidden');
         }
@@ -584,10 +885,10 @@ $totalItems = array_sum($categoryCounts);
         }
 
         function confirmDelete(itemId) {
-            if (confirm('Are you sure you want to delete this item?')) {
+            if (confirm('Archive this item? It will be hidden from the cashier menu but kept for history.')) {
                 const form = document.createElement('form');
                 form.method = 'POST';
-                form.action = 'items.php';
+                form.action = currentItemsUrl;
                 
                 const actionInput = document.createElement('input');
                 actionInput.type = 'hidden';
@@ -607,6 +908,12 @@ $totalItems = array_sum($categoryCounts);
         }
 
         function showManageCategoriesModal() {
+            const form = document.querySelector('#manageCategoriesModal form');
+            form.removeAttribute('data-edit-id');
+            form.removeAttribute('data-original-name');
+            form.removeAttribute('data-original-icon');
+            form.reset();
+            form.querySelector('button[type="submit"]').innerHTML = '<i class="fa-solid fa-plus mr-1"></i> Add Category';
             document.getElementById('manageCategoriesModal').classList.remove('hidden');
         }
 
@@ -639,37 +946,6 @@ $totalItems = array_sum($categoryCounts);
             document.getElementById('notificationModal').classList.add('hidden');
         }
 
-        function addCategory(event) {
-            event.preventDefault();
-            const name = document.getElementById('newCategoryName').value;
-            const icon = document.getElementById('newCategoryIcon').value;
-            
-            fetch('api.php?action=add_category', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    name: name,
-                    icon: icon
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    showNotificationModal('Success', 'Category "' + name + '" added successfully!', true);
-                    hideManageCategoriesModal();
-                    setTimeout(() => location.reload(), 1500);
-                } else {
-                    showNotificationModal('Error', data.error, false);
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                showNotificationModal('Error', 'An error occurred while adding the category', false);
-            });
-        }
-
         function editCategory(id, name, icon) {
             // Use the existing add category form for editing
             document.getElementById('newCategoryName').value = name;
@@ -685,7 +961,7 @@ $totalItems = array_sum($categoryCounts);
             const submitBtn = form.querySelector('button[type="submit"]');
             submitBtn.innerHTML = '<i class="fa-solid fa-pen mr-1"></i> Update Category';
             
-            showManageCategoriesModal();
+            document.getElementById('manageCategoriesModal').classList.remove('hidden');
         }
 
         function addCategory(event) {
@@ -817,7 +1093,7 @@ $totalItems = array_sum($categoryCounts);
         const sidebar = document.getElementById('sidebar');
         const sidebarToggle = document.getElementById('sidebarToggle');
         const navTexts = document.querySelectorAll('.nav-text');
-        let isCollapsed = true;
+        let isCollapsed = localStorage.getItem('sidebarCollapsed') !== 'false';
 
         // Apply collapsed state by default
         sidebarToggle.innerHTML = '<i class="fa-solid fa-chevron-right"></i>';
@@ -840,8 +1116,25 @@ $totalItems = array_sum($categoryCounts);
         const userName = sidebar.querySelector('.text-sm.font-medium');
         if (userName) userName.classList.add('hidden');
 
+        if (!isCollapsed) {
+            sidebar.classList.remove('w-[80px]');
+            sidebar.classList.add('w-[240px]');
+            sidebarToggle.innerHTML = '<i class="fa-solid fa-bars"></i>';
+            navTexts.forEach(text => text.classList.remove('hidden'));
+            navItems.forEach(item => {
+                item.classList.remove('justify-center');
+                item.classList.add('gap-4');
+            });
+            if (logoText) logoText.classList.remove('hidden');
+            if (logoSubtext) logoSubtext.classList.remove('hidden');
+            if (logoSince) logoSince.classList.remove('hidden');
+            logoDivider.forEach(div => div.classList.remove('hidden'));
+            if (userName) userName.classList.remove('hidden');
+        }
+
         sidebarToggle.addEventListener('click', () => {
             isCollapsed = !isCollapsed;
+            localStorage.setItem('sidebarCollapsed', String(isCollapsed));
             
             if (isCollapsed) {
                 sidebar.classList.remove('w-[240px]');

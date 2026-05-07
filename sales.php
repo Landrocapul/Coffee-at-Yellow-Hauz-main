@@ -14,12 +14,53 @@ if (!isAdmin()) {
 // Get current user info
 $currentUser = getCurrentUser();
 
+function percentChange($current, $previous) {
+    $current = (float)$current;
+    $previous = (float)$previous;
+    if ($previous == 0) {
+        return $current > 0 ? 100 : 0;
+    }
+    return round((($current - $previous) / $previous) * 100, 1);
+}
+
+function changeClass($value) {
+    return $value >= 0 ? 'text-green-600' : 'text-red-500';
+}
+
+function changeIcon($value) {
+    return $value >= 0 ? 'fa-arrow-trend-up' : 'fa-arrow-trend-down';
+}
+
+function salesUrl(array $overrides = []) {
+    $params = array_merge($_GET, $overrides);
+    foreach ($params as $key => $value) {
+        if ($value === '' || $value === null || ($key === 'date_filter' && $value === 'today') || ($key === 'chart_view' && $value === 'auto')) {
+            unset($params[$key]);
+        }
+    }
+    return 'sales.php' . (empty($params) ? '' : '?' . http_build_query($params));
+}
+
 // Get date filter
 $dateFilter = $_GET['date_filter'] ?? 'today';
+$chartView = $_GET['chart_view'] ?? 'auto';
+$transactionSearch = sanitize($_GET['search'] ?? '');
+$paymentFilter = $_GET['payment_method'] ?? '';
+$orderTypeFilter = $_GET['order_type'] ?? '';
+$cashierFilter = isset($_GET['cashier_id']) ? (int)$_GET['cashier_id'] : 0;
 $startDate = null;
 $endDate = null;
 
 switch ($dateFilter) {
+    case 'custom':
+        $customStart = $_GET['start_date'] ?? date('Y-m-d');
+        $customEnd = $_GET['end_date'] ?? date('Y-m-d');
+        $startDate = date('Y-m-d 00:00:00', strtotime($customStart));
+        $endDate = date('Y-m-d 23:59:59', strtotime($customEnd));
+        if ($startDate > $endDate) {
+            [$startDate, $endDate] = [$endDate, $startDate];
+        }
+        break;
     case 'today':
         $startDate = date('Y-m-d 00:00:00');
         $endDate = date('Y-m-d 23:59:59');
@@ -37,20 +78,54 @@ switch ($dateFilter) {
         $endDate = date('Y-m-t 23:59:59');
         break;
     default:
+        $dateFilter = 'today';
         $startDate = date('Y-m-d 00:00:00');
         $endDate = date('Y-m-d 23:59:59');
+}
+$periodSeconds = max(1, strtotime($endDate) - strtotime($startDate) + 1);
+$previousStartDate = date('Y-m-d H:i:s', strtotime($startDate) - $periodSeconds);
+$previousEndDate = date('Y-m-d H:i:s', strtotime($startDate) - 1);
+
+if (isset($_GET['export']) && $_GET['export'] === 'csv') {
+    $stmt = $pdo->prepare("SELECT o.order_number, o.created_at, o.order_type, COALESCE(t.table_number, '') as table_number, o.payment_method, u.full_name as cashier_name, o.subtotal, o.discount_amount, o.tax_amount, o.total_amount,
+        (SELECT COUNT(*) FROM order_items WHERE order_id = o.id) as item_count
+        FROM orders o
+        LEFT JOIN tables t ON o.table_id = t.id
+        LEFT JOIN users u ON o.cashier_id = u.id
+        WHERE o.status = 'completed' AND o.created_at BETWEEN ? AND ?
+        ORDER BY o.created_at DESC");
+    $stmt->execute([$startDate, $endDate]);
+    header('Content-Type: text/csv');
+    header('Content-Disposition: attachment; filename="sales-report-' . date('Ymd-His') . '.csv"');
+    $output = fopen('php://output', 'w');
+    fputcsv($output, ['Order Number', 'Date Time', 'Order Type', 'Table', 'Payment', 'Cashier', 'Items', 'Subtotal', 'Discount', 'Tax', 'Total']);
+    foreach ($stmt->fetchAll() as $row) {
+        fputcsv($output, $row);
+    }
+    fclose($output);
+    exit;
 }
 
 // Get sales summary
 $stmt = $pdo->prepare("SELECT 
     COUNT(*) as total_orders,
     SUM(total_amount) as total_sales,
-    AVG(total_amount) as avg_order_value
+    AVG(total_amount) as avg_order_value,
+    SUM(discount_amount) as total_discounts,
+    SUM(CASE WHEN discount_amount > 0 THEN 1 ELSE 0 END) as discounted_orders
     FROM orders 
     WHERE status = 'completed' 
     AND created_at BETWEEN ? AND ?");
 $stmt->execute([$startDate, $endDate]);
 $salesSummary = $stmt->fetch();
+
+$stmt = $pdo->prepare("SELECT COUNT(*) as total_orders, SUM(total_amount) as total_sales, AVG(total_amount) as avg_order_value
+    FROM orders WHERE status = 'completed' AND created_at BETWEEN ? AND ?");
+$stmt->execute([$previousStartDate, $previousEndDate]);
+$previousSummary = $stmt->fetch();
+$salesChange = percentChange($salesSummary['total_sales'] ?? 0, $previousSummary['total_sales'] ?? 0);
+$ordersChange = percentChange($salesSummary['total_orders'] ?? 0, $previousSummary['total_orders'] ?? 0);
+$avgOrderChange = percentChange($salesSummary['avg_order_value'] ?? 0, $previousSummary['avg_order_value'] ?? 0);
 
 // Get best selling item
 $stmt = $pdo->prepare("SELECT 
@@ -68,31 +143,47 @@ $stmt = $pdo->prepare("SELECT
 $stmt->execute([$startDate, $endDate]);
 $bestSellingItem = $stmt->fetch();
 
-// Get sales trend (hourly for today, daily for other periods)
+// Get sales trend
 $salesTrend = [];
-if ($dateFilter === 'today') {
+$salesTrendLabels = [];
+$effectiveChartView = $chartView === 'auto' ? ($dateFilter === 'today' ? 'hourly' : 'daily') : $chartView;
+if ($effectiveChartView === 'hourly') {
+    $baseDate = date('Y-m-d', strtotime($startDate));
     for ($i = 0; $i < 24; $i++) {
-        $hourStart = date('Y-m-d ' . sprintf('%02d', $i) . ':00:00');
-        $hourEnd = date('Y-m-d ' . sprintf('%02d', $i) . ':59:59');
+        $hourStart = $baseDate . ' ' . sprintf('%02d', $i) . ':00:00';
+        $hourEnd = $baseDate . ' ' . sprintf('%02d', $i) . ':59:59';
         
         $stmt = $pdo->prepare("SELECT SUM(total_amount) as sales FROM orders WHERE status = 'completed' AND created_at BETWEEN ? AND ?");
         $stmt->execute([$hourStart, $hourEnd]);
         $result = $stmt->fetch();
         $salesTrend[] = $result['sales'] ?? 0;
+        $salesTrendLabels[] = sprintf('%02d:00', $i);
+    }
+} elseif ($effectiveChartView === 'monthly') {
+    for ($i = 11; $i >= 0; $i--) {
+        $monthStart = date('Y-m-01 00:00:00', strtotime("-$i months"));
+        $monthEnd = date('Y-m-t 23:59:59', strtotime("-$i months"));
+        $stmt = $pdo->prepare("SELECT SUM(total_amount) as sales FROM orders WHERE status = 'completed' AND created_at BETWEEN ? AND ?");
+        $stmt->execute([$monthStart, $monthEnd]);
+        $result = $stmt->fetch();
+        $salesTrend[] = $result['sales'] ?? 0;
+        $salesTrendLabels[] = date('M Y', strtotime($monthStart));
     }
 } else {
-    // Daily trend for other periods
-    $days = ($dateFilter === 'this_week') ? 7 : 30;
+    $days = max(1, min(31, (int)ceil($periodSeconds / 86400)));
     for ($i = $days - 1; $i >= 0; $i--) {
-        $dayStart = date('Y-m-d 00:00:00', strtotime("-$i days"));
-        $dayEnd = date('Y-m-d 23:59:59', strtotime("-$i days"));
+        $dayStart = date('Y-m-d 00:00:00', strtotime($endDate . " -$i days"));
+        $dayEnd = date('Y-m-d 23:59:59', strtotime($endDate . " -$i days"));
         
         $stmt = $pdo->prepare("SELECT SUM(total_amount) as sales FROM orders WHERE status = 'completed' AND created_at BETWEEN ? AND ?");
         $stmt->execute([$dayStart, $dayEnd]);
         $result = $stmt->fetch();
         $salesTrend[] = $result['sales'] ?? 0;
+        $salesTrendLabels[] = date('M d', strtotime($dayStart));
     }
 }
+$peakIndex = empty($salesTrend) ? null : array_keys($salesTrend, max($salesTrend))[0];
+$slowIndex = empty($salesTrend) ? null : array_keys($salesTrend, min($salesTrend))[0];
 
 // Get order type breakdown
 $stmt = $pdo->prepare("SELECT 
@@ -123,6 +214,19 @@ $stmt = $pdo->prepare("SELECT
     GROUP BY payment_method");
 $stmt->execute([$startDate, $endDate]);
 $paymentBreakdown = $stmt->fetchAll();
+
+// Get cashier breakdown
+$stmt = $pdo->prepare("SELECT u.id, u.full_name, COUNT(*) as order_count, SUM(o.total_amount) as total_sales, AVG(o.total_amount) as avg_order_value
+    FROM orders o
+    JOIN users u ON o.cashier_id = u.id
+    WHERE o.status = 'completed' AND o.created_at BETWEEN ? AND ?
+    GROUP BY u.id, u.full_name
+    ORDER BY total_sales DESC");
+$stmt->execute([$startDate, $endDate]);
+$cashierBreakdown = $stmt->fetchAll();
+
+$stmt = $pdo->query("SELECT id, full_name FROM users ORDER BY full_name ASC");
+$cashiers = $stmt->fetchAll();
 
 // Get category sales
 $stmt = $pdo->prepare("SELECT 
@@ -156,21 +260,44 @@ $stmt->execute([$startDate, $endDate]);
 $topProducts = $stmt->fetchAll();
 
 // Get detailed transactions
+$transactionWhere = ["o.status = 'completed'", "o.created_at BETWEEN ? AND ?"];
+$transactionParams = [$startDate, $endDate];
+if ($transactionSearch !== '') {
+    $transactionWhere[] = "(o.order_number LIKE ? OR u.full_name LIKE ? OR o.customer_name LIKE ?)";
+    $like = '%' . $transactionSearch . '%';
+    array_push($transactionParams, $like, $like, $like);
+}
+if (in_array($paymentFilter, ['cash', 'card', 'gcash'], true)) {
+    $transactionWhere[] = "o.payment_method = ?";
+    $transactionParams[] = $paymentFilter;
+}
+if (in_array($orderTypeFilter, ['dine_in', 'take_away', 'delivery'], true)) {
+    $transactionWhere[] = "o.order_type = ?";
+    $transactionParams[] = $orderTypeFilter;
+}
+if ($cashierFilter > 0) {
+    $transactionWhere[] = "o.cashier_id = ?";
+    $transactionParams[] = $cashierFilter;
+}
+$transactionWhereSql = implode(' AND ', $transactionWhere);
 $stmt = $pdo->prepare("SELECT 
+    o.id,
     o.order_number,
     o.created_at,
     o.order_type,
     t.table_number,
     o.payment_method,
+    u.full_name as cashier_name,
+    o.discount_amount,
     o.total_amount,
     (SELECT COUNT(*) FROM order_items WHERE order_id = o.id) as item_count
     FROM orders o
     LEFT JOIN tables t ON o.table_id = t.id
-    WHERE o.status = 'completed' 
-    AND o.created_at BETWEEN ? AND ?
+    LEFT JOIN users u ON o.cashier_id = u.id
+    WHERE {$transactionWhereSql}
     ORDER BY o.created_at DESC
     LIMIT 50");
-$stmt->execute([$startDate, $endDate]);
+$stmt->execute($transactionParams);
 $transactions = $stmt->fetchAll();
 ?>
 <!DOCTYPE html>
@@ -304,14 +431,14 @@ $transactions = $stmt->fetchAll();
                         <a href="?date_filter=this_week" class="px-3 py-1.5 rounded-md <?php echo $dateFilter === 'this_week' ? 'bg-brand-light text-brand-dark font-bold border border-brand/20 shadow-sm' : 'text-gray-500 hover:text-brand-black font-semibold'; ?> transition-all">This Week</a>
                         <a href="?date_filter=this_month" class="px-3 py-1.5 rounded-md <?php echo $dateFilter === 'this_month' ? 'bg-brand-light text-brand-dark font-bold border border-brand/20 shadow-sm' : 'text-gray-500 hover:text-brand-black font-semibold'; ?> transition-all">This Month</a>
                         <div class="w-px h-4 bg-gray-300 mx-1"></div>
-                        <button class="px-3 py-1.5 rounded-md text-gray-500 hover:text-brand-black font-semibold flex items-center gap-2 transition-all">
+                        <button onclick="showCustomDateModal()" class="px-3 py-1.5 rounded-md <?php echo $dateFilter === 'custom' ? 'bg-brand-light text-brand-dark font-bold border border-brand/20 shadow-sm' : 'text-gray-500 hover:text-brand-black font-semibold'; ?> flex items-center gap-2 transition-all">
                             <i class="fa-regular fa-calendar"></i> Custom
                         </button>
                     </div>
                     
-                    <button class="bg-brand-black text-brand w-10 h-10 rounded-lg flex items-center justify-center font-bold shadow-[2px_2px_0px_0px_rgba(251,191,36,1)] hover:bg-gray-800 transition-all active:translate-y-0.5 active:translate-x-0.5 active:shadow-none border border-transparent">
+                    <a href="<?php echo salesUrl(['export' => 'csv']); ?>" class="bg-brand-black text-brand w-10 h-10 rounded-lg flex items-center justify-center font-bold shadow-[2px_2px_0px_0px_rgba(251,191,36,1)] hover:bg-gray-800 transition-all active:translate-y-0.5 active:translate-x-0.5 active:shadow-none border border-transparent">
                         <i class="fa-solid fa-download"></i>
-                    </button>
+                    </a>
                 </div>
             </header>
 
@@ -326,7 +453,7 @@ $transactions = $stmt->fetchAll();
                         <div>
                             <p class="text-xs text-gray-500 font-bold uppercase tracking-wider mb-1">Total Sales</p>
                             <h3 class="font-serif text-3xl font-bold text-brand-black"><?php echo formatCurrency($salesSummary['total_sales'] ?? 0); ?></h3>
-                            <p class="text-[11px] font-bold mt-2 text-green-600 flex items-center gap-1"><i class="fa-solid fa-arrow-trend-up"></i> <?php echo $salesSummary['total_sales'] > 0 ? '+15%' : '0%'; ?> vs Previous</p>
+                            <p class="text-[11px] font-bold mt-2 <?php echo changeClass($salesChange); ?> flex items-center gap-1"><i class="fa-solid <?php echo changeIcon($salesChange); ?>"></i> <?php echo $salesChange > 0 ? '+' : ''; ?><?php echo $salesChange; ?>% vs Previous</p>
                         </div>
                         <div class="w-10 h-10 rounded-full bg-brand-light text-brand-dark flex items-center justify-center text-lg shadow-inner"><i class="fa-solid fa-coins"></i></div>
                     </div>
@@ -336,7 +463,7 @@ $transactions = $stmt->fetchAll();
                         <div>
                             <p class="text-xs text-gray-500 font-bold uppercase tracking-wider mb-1">Total Orders</p>
                             <h3 class="font-serif text-3xl font-bold text-brand-black"><?php echo $salesSummary['total_orders'] ?? 0; ?></h3>
-                            <p class="text-[11px] font-bold mt-2 text-green-600 flex items-center gap-1"><i class="fa-solid fa-arrow-trend-up"></i> +8% vs Previous</p>
+                            <p class="text-[11px] font-bold mt-2 <?php echo changeClass($ordersChange); ?> flex items-center gap-1"><i class="fa-solid <?php echo changeIcon($ordersChange); ?>"></i> <?php echo $ordersChange > 0 ? '+' : ''; ?><?php echo $ordersChange; ?>% vs Previous</p>
                         </div>
                         <div class="w-10 h-10 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center text-lg shadow-inner"><i class="fa-solid fa-receipt"></i></div>
                     </div>
@@ -346,7 +473,7 @@ $transactions = $stmt->fetchAll();
                         <div>
                             <p class="text-xs text-gray-500 font-bold uppercase tracking-wider mb-1">Avg Order Value</p>
                             <h3 class="font-serif text-3xl font-bold text-brand-black"><?php echo formatCurrency($salesSummary['avg_order_value'] ?? 0); ?></h3>
-                            <p class="text-[11px] font-bold mt-2 text-red-500 flex items-center gap-1"><i class="fa-solid fa-arrow-trend-down"></i> -2% vs Previous</p>
+                            <p class="text-[11px] font-bold mt-2 <?php echo changeClass($avgOrderChange); ?> flex items-center gap-1"><i class="fa-solid <?php echo changeIcon($avgOrderChange); ?>"></i> <?php echo $avgOrderChange > 0 ? '+' : ''; ?><?php echo $avgOrderChange; ?>% vs Previous</p>
                         </div>
                         <div class="w-10 h-10 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center text-lg shadow-inner"><i class="fa-solid fa-chart-pie"></i></div>
                     </div>
@@ -370,9 +497,19 @@ $transactions = $stmt->fetchAll();
                             <p class="text-xs text-gray-500 font-medium mt-1">Gross sales over the selected period</p>
                         </div>
                         <div class="flex items-center bg-gray-50 border border-gray-200 rounded-md p-1">
-                            <button class="px-3 py-1 rounded bg-white text-brand-black font-bold text-xs shadow-sm">Hourly</button>
-                            <button class="px-3 py-1 rounded text-gray-500 hover:text-brand-black font-semibold text-xs transition-all">Daily</button>
-                            <button class="px-3 py-1 rounded text-gray-500 hover:text-brand-black font-semibold text-xs transition-all">Monthly</button>
+                            <a href="<?php echo salesUrl(['chart_view' => 'hourly']); ?>" class="px-3 py-1 rounded <?php echo $effectiveChartView === 'hourly' ? 'bg-white text-brand-black font-bold shadow-sm' : 'text-gray-500 hover:text-brand-black font-semibold'; ?> text-xs transition-all">Hourly</a>
+                            <a href="<?php echo salesUrl(['chart_view' => 'daily']); ?>" class="px-3 py-1 rounded <?php echo $effectiveChartView === 'daily' ? 'bg-white text-brand-black font-bold shadow-sm' : 'text-gray-500 hover:text-brand-black font-semibold'; ?> text-xs transition-all">Daily</a>
+                            <a href="<?php echo salesUrl(['chart_view' => 'monthly']); ?>" class="px-3 py-1 rounded <?php echo $effectiveChartView === 'monthly' ? 'bg-white text-brand-black font-bold shadow-sm' : 'text-gray-500 hover:text-brand-black font-semibold'; ?> text-xs transition-all">Monthly</a>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                        <div class="bg-gray-50 border border-gray-200 rounded-xl p-3">
+                            <p class="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Peak Period</p>
+                            <p class="text-sm font-bold text-brand-black mt-1"><?php echo $peakIndex !== null ? htmlspecialchars($salesTrendLabels[$peakIndex]) . ' · ' . formatCurrency($salesTrend[$peakIndex]) : 'No data'; ?></p>
+                        </div>
+                        <div class="bg-gray-50 border border-gray-200 rounded-xl p-3">
+                            <p class="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Slowest Period</p>
+                            <p class="text-sm font-bold text-brand-black mt-1"><?php echo $slowIndex !== null ? htmlspecialchars($salesTrendLabels[$slowIndex]) . ' · ' . formatCurrency($salesTrend[$slowIndex]) : 'No data'; ?></p>
                         </div>
                     </div>
                     <div class="w-full flex-1 min-h-[250px] relative">
@@ -510,7 +647,42 @@ $transactions = $stmt->fetchAll();
 
                 </div>
 
-                <!-- 5. Detailed Transaction Table -->
+                <!-- 5. Discounts & Cashiers -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                    <div class="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
+                        <h3 class="font-serif text-lg font-bold text-brand-black mb-5">Discount Impact</h3>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div class="bg-gray-50 border border-gray-200 rounded-xl p-4">
+                                <p class="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Total Discounts</p>
+                                <p class="font-serif text-2xl font-bold text-brand-black mt-1"><?php echo formatCurrency($salesSummary['total_discounts'] ?? 0); ?></p>
+                            </div>
+                            <div class="bg-gray-50 border border-gray-200 rounded-xl p-4">
+                                <p class="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Discounted Orders</p>
+                                <p class="font-serif text-2xl font-bold text-brand-black mt-1"><?php echo (int)($salesSummary['discounted_orders'] ?? 0); ?></p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
+                        <h3 class="font-serif text-lg font-bold text-brand-black mb-5">Cashier Breakdown</h3>
+                        <div class="space-y-3 max-h-56 overflow-y-auto pr-1">
+                            <?php foreach ($cashierBreakdown as $cashier): ?>
+                            <div class="flex items-center justify-between p-3 bg-gray-50 border border-gray-100 rounded-xl">
+                                <div>
+                                    <p class="font-bold text-sm text-brand-black"><?php echo htmlspecialchars($cashier['full_name']); ?></p>
+                                    <p class="text-[10px] text-gray-500 font-bold uppercase tracking-wider"><?php echo (int)$cashier['order_count']; ?> orders · Avg <?php echo formatCurrency($cashier['avg_order_value']); ?></p>
+                                </div>
+                                <p class="font-serif font-bold text-brand-black"><?php echo formatCurrency($cashier['total_sales']); ?></p>
+                            </div>
+                            <?php endforeach; ?>
+                            <?php if (empty($cashierBreakdown)): ?>
+                            <p class="text-sm text-gray-400 text-center py-8">No cashier sales in this period</p>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 6. Detailed Transaction Table -->
                 <div class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden mb-8">
                     <!-- Table Header Tools -->
                     <div class="p-6 border-b border-gray-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-vintage-paper">
@@ -519,15 +691,39 @@ $transactions = $stmt->fetchAll();
                             <p class="text-xs text-gray-500 mt-1 font-medium">Complete ledger of all orders recorded.</p>
                         </div>
                         
-                        <div class="flex items-center gap-3 w-full sm:w-auto">
+                        <form method="GET" action="sales.php" class="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+                            <input type="hidden" name="date_filter" value="<?php echo htmlspecialchars($dateFilter); ?>">
+                            <input type="hidden" name="chart_view" value="<?php echo htmlspecialchars($chartView); ?>">
+                            <?php if ($dateFilter === 'custom'): ?>
+                            <input type="hidden" name="start_date" value="<?php echo htmlspecialchars(date('Y-m-d', strtotime($startDate))); ?>">
+                            <input type="hidden" name="end_date" value="<?php echo htmlspecialchars(date('Y-m-d', strtotime($endDate))); ?>">
+                            <?php endif; ?>
                             <div class="relative w-full sm:w-64">
                                 <i class="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm"></i>
-                                <input type="text" placeholder="Search Order ID..." class="w-full bg-white h-9 rounded-md pl-9 pr-3 text-sm focus:outline-none focus:ring-1 focus:ring-brand border border-gray-200 shadow-sm">
+                                <input type="text" name="search" value="<?php echo htmlspecialchars($transactionSearch); ?>" placeholder="Search order, cashier, customer..." class="w-full bg-white h-9 rounded-md pl-9 pr-3 text-sm focus:outline-none focus:ring-1 focus:ring-brand border border-gray-200 shadow-sm">
                             </div>
+                            <select name="payment_method" class="bg-white border border-gray-200 h-9 rounded-md px-2 text-sm font-semibold text-gray-600">
+                                <option value="">All Payments</option>
+                                <option value="cash" <?php echo $paymentFilter === 'cash' ? 'selected' : ''; ?>>Cash</option>
+                                <option value="card" <?php echo $paymentFilter === 'card' ? 'selected' : ''; ?>>Card</option>
+                                <option value="gcash" <?php echo $paymentFilter === 'gcash' ? 'selected' : ''; ?>>GCash</option>
+                            </select>
+                            <select name="order_type" class="bg-white border border-gray-200 h-9 rounded-md px-2 text-sm font-semibold text-gray-600">
+                                <option value="">All Types</option>
+                                <option value="dine_in" <?php echo $orderTypeFilter === 'dine_in' ? 'selected' : ''; ?>>Dine In</option>
+                                <option value="take_away" <?php echo $orderTypeFilter === 'take_away' ? 'selected' : ''; ?>>Take Out</option>
+                                <option value="delivery" <?php echo $orderTypeFilter === 'delivery' ? 'selected' : ''; ?>>Delivery</option>
+                            </select>
+                            <select name="cashier_id" class="bg-white border border-gray-200 h-9 rounded-md px-2 text-sm font-semibold text-gray-600">
+                                <option value="0">All Cashiers</option>
+                                <?php foreach ($cashiers as $cashier): ?>
+                                <option value="<?php echo (int)$cashier['id']; ?>" <?php echo $cashierFilter === (int)$cashier['id'] ? 'selected' : ''; ?>><?php echo htmlspecialchars($cashier['full_name']); ?></option>
+                                <?php endforeach; ?>
+                            </select>
                             <button class="bg-white border border-gray-300 text-gray-600 px-3 py-1.5 rounded-md text-sm font-bold shadow-sm hover:text-brand-black hover:border-brand-black transition-colors flex items-center gap-2">
-                                <i class="fa-solid fa-filter"></i> Filter
+                                <i class="fa-solid fa-filter"></i> Apply
                             </button>
-                        </div>
+                        </form>
                     </div>
                     
                     <!-- Scrollable Table Body -->
@@ -540,6 +736,7 @@ $transactions = $stmt->fetchAll();
                                     <th class="py-4 px-6 text-xs font-bold text-gray-500 uppercase tracking-wider">Type / Table</th>
                                     <th class="py-4 px-6 text-xs font-bold text-gray-500 uppercase tracking-wider text-center">Items</th>
                                     <th class="py-4 px-6 text-xs font-bold text-gray-500 uppercase tracking-wider">Payment</th>
+                                    <th class="py-4 px-6 text-xs font-bold text-gray-500 uppercase tracking-wider">Cashier</th>
                                     <th class="py-4 px-6 text-xs font-bold text-gray-500 uppercase tracking-wider text-right">Total Amount</th>
                                     <th class="py-4 px-6 text-xs font-bold text-gray-500 uppercase tracking-wider text-center">Action</th>
                                 </tr>
@@ -567,12 +764,18 @@ $transactions = $stmt->fetchAll();
                                             <i class="<?php echo $icon; ?>"></i> <?php echo ucfirst($transaction['payment_method']); ?>
                                         </span>
                                     </td>
+                                    <td class="py-4 px-6 text-sm text-gray-600 font-medium"><?php echo htmlspecialchars($transaction['cashier_name'] ?? 'N/A'); ?></td>
                                     <td class="py-4 px-6 text-right font-serif font-bold text-brand-black text-lg"><?php echo formatCurrency($transaction['total_amount']); ?></td>
                                     <td class="py-4 px-6 text-center">
-                                        <button class="text-gray-400 hover:text-brand-black transition-colors"><i class="fa-regular fa-eye"></i></button>
+                                        <button onclick="viewOrder(<?php echo (int)$transaction['id']; ?>)" class="text-gray-400 hover:text-brand-black transition-colors"><i class="fa-regular fa-eye"></i></button>
                                     </td>
                                 </tr>
                                 <?php endforeach; ?>
+                                <?php if (empty($transactions)): ?>
+                                <tr>
+                                    <td colspan="8" class="py-10 text-center text-gray-400 text-sm">No transactions match the selected filters</td>
+                                </tr>
+                                <?php endif; ?>
                             </tbody>
                         </table>
                     </div>
@@ -603,13 +806,63 @@ $transactions = $stmt->fetchAll();
         </div>
     </div>
 
+    <!-- Custom Date Modal -->
+    <div id="customDateModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-200">
+            <h3 class="text-xl font-serif font-bold text-brand-black mb-4">Custom Sales Range</h3>
+            <form action="sales.php" method="GET" class="space-y-4">
+                <input type="hidden" name="date_filter" value="custom">
+                <div>
+                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Start Date</label>
+                    <input type="date" name="start_date" value="<?php echo htmlspecialchars(date('Y-m-d', strtotime($startDate))); ?>" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">End Date</label>
+                    <input type="date" name="end_date" value="<?php echo htmlspecialchars(date('Y-m-d', strtotime($endDate))); ?>" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                </div>
+                <div class="flex gap-3 pt-4">
+                    <button type="button" onclick="hideCustomDateModal()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">Cancel</button>
+                    <button type="submit" class="flex-1 bg-brand-black text-brand py-3 rounded-xl font-bold hover:bg-gray-800 transition-colors">Apply</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Order Details Modal -->
+    <div id="orderDetailsModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-2xl max-w-lg w-full mx-4 shadow-2xl border border-gray-200 max-h-[90vh] overflow-hidden flex flex-col">
+            <div class="p-6 border-b border-gray-100 flex items-start justify-between gap-4">
+                <div>
+                    <p id="orderDetailsNumber" class="text-xs font-bold text-gray-500 uppercase tracking-wider">Order</p>
+                    <h3 id="orderDetailsCustomer" class="text-2xl font-serif font-bold text-brand-black mt-1">Transaction Details</h3>
+                    <p id="orderDetailsMeta" class="text-sm text-gray-500 mt-1"></p>
+                </div>
+                <button type="button" onclick="hideOrderDetailsModal()" class="w-9 h-9 rounded-full bg-gray-100 text-gray-500 hover:text-brand-black hover:bg-gray-200 transition-colors shrink-0">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div class="p-6 overflow-y-auto">
+                <div id="orderDetailsItems" class="space-y-3 mb-5"></div>
+                <div class="border-t border-gray-200 pt-4 space-y-2">
+                    <div class="flex justify-between text-sm"><span class="text-gray-600">Subtotal</span><span id="orderDetailsSubtotal" class="font-bold"></span></div>
+                    <div class="flex justify-between text-sm"><span class="text-gray-600">Discount</span><span id="orderDetailsDiscount" class="font-bold text-green-600"></span></div>
+                    <div class="flex justify-between text-sm"><span class="text-gray-600">Tax</span><span id="orderDetailsTax" class="font-bold"></span></div>
+                    <div class="flex justify-between text-lg pt-2 border-t border-gray-100"><span class="font-bold">Total</span><span id="orderDetailsTotal" class="font-bold"></span></div>
+                </div>
+            </div>
+            <div class="p-6 border-t border-gray-100 bg-gray-50">
+                <button type="button" onclick="hideOrderDetailsModal()" class="w-full bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">Close</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Sales Trend Chart
         const salesTrendCtx = document.getElementById('salesTrendChart').getContext('2d');
         new Chart(salesTrendCtx, {
             type: 'line',
             data: {
-                labels: <?php echo json_encode($dateFilter === 'today' ? range(0, 23) : array_map(function($i) { return date('M d', strtotime("-$i days")); }, range(count($salesTrend) - 1, 0, -1))); ?>,
+                labels: <?php echo json_encode($salesTrendLabels); ?>,
                 datasets: [{
                     label: 'Sales',
                     data: <?php echo json_encode($salesTrend); ?>,
@@ -676,11 +929,88 @@ $transactions = $stmt->fetchAll();
             document.getElementById('logoutModal').classList.add('hidden');
         }
 
+        function showCustomDateModal() {
+            document.getElementById('customDateModal').classList.remove('hidden');
+        }
+
+        function hideCustomDateModal() {
+            document.getElementById('customDateModal').classList.add('hidden');
+        }
+
+        function formatPeso(amount) {
+            return new Intl.NumberFormat('en-PH', {
+                style: 'currency',
+                currency: 'PHP',
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }).format(Number(amount) || 0);
+        }
+
+        function escapeHtml(value) {
+            const div = document.createElement('div');
+            div.textContent = value || '';
+            return div.innerHTML;
+        }
+
+        function hideOrderDetailsModal() {
+            document.getElementById('orderDetailsModal').classList.add('hidden');
+        }
+
+        function viewOrder(orderId) {
+            const modal = document.getElementById('orderDetailsModal');
+            const itemsContainer = document.getElementById('orderDetailsItems');
+            itemsContainer.innerHTML = '<p class="text-center text-sm text-gray-400 py-6">Loading transaction...</p>';
+            modal.classList.remove('hidden');
+
+            fetch('api.php?action=get_order_details&order_id=' + encodeURIComponent(orderId))
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.success) {
+                        itemsContainer.innerHTML = '<p class="text-center text-sm text-red-600 py-6">' + (data.error || 'Unable to load transaction.') + '</p>';
+                        return;
+                    }
+
+                    const order = data.data.order;
+                    const items = data.data.items || [];
+                    const tableLabel = order.table_number ? 'Table ' + order.table_number : order.order_type.replace('_', ' ');
+                    const createdAt = new Date(order.created_at.replace(' ', 'T'));
+
+                    document.getElementById('orderDetailsNumber').textContent = 'Order #' + order.order_number;
+                    document.getElementById('orderDetailsCustomer').textContent = order.customer_name || 'Guest';
+                    document.getElementById('orderDetailsMeta').textContent = tableLabel + ' · ' + order.payment_method + ' · ' + createdAt.toLocaleString([], {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: 'numeric',
+                        minute: '2-digit'
+                    });
+                    document.getElementById('orderDetailsSubtotal').textContent = formatPeso(order.subtotal);
+                    document.getElementById('orderDetailsDiscount').textContent = '-' + formatPeso(order.discount_amount);
+                    document.getElementById('orderDetailsTax').textContent = formatPeso(order.tax_amount);
+                    document.getElementById('orderDetailsTotal').textContent = formatPeso(order.total_amount);
+
+                    itemsContainer.innerHTML = items.map(item => `
+                        <div class="flex justify-between gap-4 rounded-xl border border-gray-200 bg-white p-3">
+                            <div>
+                                <p class="font-bold text-sm text-brand-black">${escapeHtml(item.name)}</p>
+                                <p class="text-xs text-gray-500 mt-1">${formatPeso(item.unit_price)} each</p>
+                            </div>
+                            <div class="text-right">
+                                <p class="text-sm font-bold text-brand-black">${item.quantity}x</p>
+                                <p class="text-xs text-gray-500 mt-1">${formatPeso(item.total_price)}</p>
+                            </div>
+                        </div>
+                    `).join('') || '<p class="text-center text-sm text-gray-400 py-6">No items found</p>';
+                })
+                .catch(() => {
+                    itemsContainer.innerHTML = '<p class="text-center text-sm text-red-600 py-6">Unable to load transaction.</p>';
+                });
+        }
+
         // Sidebar toggle functionality
         const sidebar = document.getElementById('sidebar');
         const sidebarToggle = document.getElementById('sidebarToggle');
         const navTexts = document.querySelectorAll('.nav-text');
-        let isCollapsed = true;
+        let isCollapsed = localStorage.getItem('sidebarCollapsed') !== 'false';
 
         // Apply collapsed state by default
         sidebarToggle.innerHTML = '<i class="fa-solid fa-chevron-right"></i>';
@@ -703,8 +1033,25 @@ $transactions = $stmt->fetchAll();
         const userName = sidebar.querySelector('.text-sm.font-medium');
         if (userName) userName.classList.add('hidden');
 
+        if (!isCollapsed) {
+            sidebar.classList.remove('w-[80px]');
+            sidebar.classList.add('w-[240px]');
+            sidebarToggle.innerHTML = '<i class="fa-solid fa-bars"></i>';
+            navTexts.forEach(text => text.classList.remove('hidden'));
+            navItems.forEach(item => {
+                item.classList.remove('justify-center');
+                item.classList.add('gap-4');
+            });
+            if (logoText) logoText.classList.remove('hidden');
+            if (logoSubtext) logoSubtext.classList.remove('hidden');
+            if (logoSince) logoSince.classList.remove('hidden');
+            logoDivider.forEach(div => div.classList.remove('hidden'));
+            if (userName) userName.classList.remove('hidden');
+        }
+
         sidebarToggle.addEventListener('click', () => {
             isCollapsed = !isCollapsed;
+            localStorage.setItem('sidebarCollapsed', String(isCollapsed));
             
             if (isCollapsed) {
                 sidebar.classList.remove('w-[240px]');

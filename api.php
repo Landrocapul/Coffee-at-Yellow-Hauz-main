@@ -312,7 +312,7 @@ try {
                 $categoryId = (int)$input['id'];
                 
                 // Check if category has menu items
-                $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM menu_items WHERE category_id = ? AND is_available = 1");
+                $stmt = $pdo->prepare("SELECT COUNT(*) as count FROM menu_items WHERE category_id = ?");
                 $stmt->execute([$categoryId]);
                 $itemCount = $stmt->fetch()['count'];
                 
