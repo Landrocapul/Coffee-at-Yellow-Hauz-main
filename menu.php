@@ -1832,5 +1832,6 @@ $totalAmount = $subtotal + $taxAmount;
             }
         });
     </script>
+    <?php include 'staff_chatbot.php'; ?>
 </body>
 </html>

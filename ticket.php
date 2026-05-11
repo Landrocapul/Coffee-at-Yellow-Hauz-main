@@ -809,5 +809,6 @@ $ticketStats = $stmt->fetch();
             }
         });
     </script>
+    <?php include 'staff_chatbot.php'; ?>
 </body>
 </html>

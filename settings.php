@@ -800,5 +800,6 @@ $settingsUpdatedAt = $stmt->fetch()['updated_at'] ?? null;
             }
         });
     </script>
+    <?php include 'staff_chatbot.php'; ?>
 </body>
 </html>

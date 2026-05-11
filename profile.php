@@ -397,5 +397,6 @@ $homeUrl = hasAdminAccess() ? 'menu.php' : 'menu.php';
             }
         });
     </script>
+    <?php include 'staff_chatbot.php'; ?>
 </body>
 </html>

@@ -730,5 +730,6 @@ foreach ($productAnalytics as $product) {
             }
         });
     </script>
+    <?php include 'staff_chatbot.php'; ?>
 </body>
 </html>

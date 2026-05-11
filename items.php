@@ -1195,5 +1195,6 @@ $totalItems = array_sum($categoryCounts);
             }
         });
     </script>
+    <?php include 'staff_chatbot.php'; ?>
 </body>
 </html>

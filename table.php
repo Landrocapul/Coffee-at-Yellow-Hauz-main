@@ -660,5 +660,6 @@ foreach ($tables as $index => $table) {
             }
         });
     </script>
+    <?php include 'staff_chatbot.php'; ?>
 </body>
 </html>

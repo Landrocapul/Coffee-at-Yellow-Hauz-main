@@ -1112,5 +1112,6 @@ $transactions = $stmt->fetchAll();
             }
         });
     </script>
+    <?php include 'staff_chatbot.php'; ?>
 </body>
 </html>

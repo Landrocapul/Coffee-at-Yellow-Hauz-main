@@ -1,0 +1,58 @@
+{
+  "intents": [
+    {
+      "tag": "take_order",
+      "patterns": ["take order", "new order", "add to cart", "customer order"],
+      "keywords": ["order", "cart", "customer", "menu", "quantity"],
+      "response": "To take an order: open Menu, choose a category, add items to the cart, adjust quantities, choose dine-in or takeaway, pick the table if needed, select payment, then complete and print the receipt."
+    },
+    {
+      "tag": "payments",
+      "patterns": ["cash payment", "gcash payment", "card payment", "process payment"],
+      "keywords": ["payment", "cash", "gcash", "card", "paid", "receipt", "change"],
+      "response": "In the cart panel, choose Cash, Card, or GCash before completing the order. For cash, enter the amount received so the system can calculate change, then print the receipt."
+    },
+    {
+      "tag": "tables",
+      "patterns": ["table status", "assign table", "available table", "occupied table"],
+      "keywords": ["table", "available", "occupied", "dine", "seat", "service"],
+      "response": "Use Table Services to check table availability. Dine-in orders occupy the selected table automatically. When the ticket is completed or cancelled, the table is released."
+    },
+    {
+      "tag": "tickets",
+      "patterns": ["complete ticket", "cancel ticket", "order status", "print ticket"],
+      "keywords": ["ticket", "status", "complete", "completed", "cancel", "cancelled", "print"],
+      "response": "Open Tickets to review active orders. Use the ticket actions to print, complete, or cancel an order. Completing or cancelling a dine-in ticket frees its table."
+    },
+    {
+      "tag": "stock",
+      "patterns": ["low stock", "out of stock", "restock item", "inventory"],
+      "keywords": ["stock", "restock", "inventory", "quantity", "unavailable", "available", "item"],
+      "response": "Admins can manage stock in Manage Food Items. Use the restock action to add quantity, and watch the bell on Menu for low-stock alerts."
+    },
+    {
+      "tag": "menu_management",
+      "patterns": ["add item", "edit item", "delete item", "manage food"],
+      "keywords": ["add", "edit", "delete", "archive", "category", "food", "dish", "price"],
+      "response": "Admins can open Manage Food Items to add dishes, edit prices and descriptions, restock inventory, archive unavailable items, and manage categories."
+    },
+    {
+      "tag": "reports",
+      "patterns": ["sales report", "product analytics", "view reports", "best seller"],
+      "keywords": ["sales", "report", "analytics", "revenue", "transactions", "best", "seller"],
+      "response": "Admins can open Sales Report for transactions and revenue, or Product Analytics for item performance, slow movers, low stock, and best sellers."
+    },
+    {
+      "tag": "users",
+      "patterns": ["add staff", "change password", "manage users", "account settings"],
+      "keywords": ["user", "staff", "password", "account", "settings", "admin", "cashier"],
+      "response": "Use Profile to update your own account. Admins can open Settings to add staff, deactivate users, and update store or receipt settings."
+    },
+    {
+      "tag": "help",
+      "patterns": ["help", "what can you do", "guide me"],
+      "keywords": ["help", "guide", "assist", "how"],
+      "response": "I can guide staff through orders, payments, table service, tickets, stock, menu management, reports, and account settings. Ask a short question like 'how do I take an order?'"
+    }
+  ]
+}

@@ -213,6 +213,120 @@ try {
             }
             break;
 
+        case 'staff_chatbot':
+            if ($method === 'POST') {
+                $input = json_decode(file_get_contents('php://input'), true) ?: [];
+                $message = trim((string)($input['message'] ?? ''));
+
+                if ($message === '') {
+                    echo json_encode(['success' => false, 'error' => 'Please enter a question.']);
+                    exit;
+                }
+
+                $scriptPath = __DIR__ . DIRECTORY_SEPARATOR . 'chatbot' . DIRECTORY_SEPARATOR . 'chatbot.py';
+                if (!is_file($scriptPath)) {
+                    echo json_encode(['success' => false, 'error' => 'Chatbot script is missing.']);
+                    exit;
+                }
+
+                $configuredPython = trim((string)getenv('CHATBOT_PYTHON'));
+                $pythonCommands = array_filter([$configuredPython, 'python', 'py', 'python3']);
+                $output = null;
+                $exitCode = 1;
+
+                foreach ($pythonCommands as $pythonCommand) {
+                    $command = escapeshellarg($pythonCommand) . ' ' . escapeshellarg($scriptPath) . ' ' . escapeshellarg($message) . ' 2>&1';
+                    $lines = [];
+                    exec($command, $lines, $exitCode);
+                    $candidateOutput = trim(implode("\n", $lines));
+
+                    if ($exitCode === 0 && $candidateOutput !== '') {
+                        $output = $candidateOutput;
+                        break;
+                    }
+                }
+
+                if ($exitCode !== 0 || $output === null) {
+                    echo json_encode(['success' => false, 'error' => 'Python chatbot is unavailable. Check that Python is installed and allowed by PHP.']);
+                    exit;
+                }
+
+                $botResponse = json_decode($output, true);
+                if (!is_array($botResponse) || !isset($botResponse['reply'])) {
+                    echo json_encode(['success' => false, 'error' => 'Chatbot returned an invalid response.']);
+                    exit;
+                }
+
+                echo json_encode([
+                    'success' => true,
+                    'reply' => $botResponse['reply'],
+                    'matched_intent' => $botResponse['matched_intent'] ?? null,
+                    'confidence' => $botResponse['confidence'] ?? null,
+                    'needs_training' => $botResponse['needs_training'] ?? false,
+                    'source' => $botResponse['source'] ?? null
+                ]);
+            }
+            break;
+
+        case 'staff_chatbot_learn':
+            if ($method === 'POST') {
+                $input = json_decode(file_get_contents('php://input'), true) ?: [];
+                $question = trim((string)($input['question'] ?? ''));
+                $answer = trim((string)($input['answer'] ?? ''));
+
+                if ($question === '' || $answer === '') {
+                    echo json_encode(['success' => false, 'error' => 'Question and answer are required.']);
+                    exit;
+                }
+
+                if (strlen($question) > 300 || strlen($answer) > 1000) {
+                    echo json_encode(['success' => false, 'error' => 'Training text is too long.']);
+                    exit;
+                }
+
+                $scriptPath = __DIR__ . DIRECTORY_SEPARATOR . 'chatbot' . DIRECTORY_SEPARATOR . 'chatbot.py';
+                if (!is_file($scriptPath)) {
+                    echo json_encode(['success' => false, 'error' => 'Chatbot script is missing.']);
+                    exit;
+                }
+
+                $configuredPython = trim((string)getenv('CHATBOT_PYTHON'));
+                $pythonCommands = array_filter([$configuredPython, 'python', 'py', 'python3']);
+                $output = null;
+                $exitCode = 1;
+                $learnedBy = $currentUser['username'] ?? $currentUser['full_name'] ?? 'staff';
+
+                foreach ($pythonCommands as $pythonCommand) {
+                    $command = escapeshellarg($pythonCommand) . ' ' . escapeshellarg($scriptPath) . ' --learn ' . escapeshellarg($question) . ' ' . escapeshellarg($answer) . ' ' . escapeshellarg($learnedBy) . ' 2>&1';
+                    $lines = [];
+                    exec($command, $lines, $exitCode);
+                    $candidateOutput = trim(implode("\n", $lines));
+
+                    if ($exitCode === 0 && $candidateOutput !== '') {
+                        $output = $candidateOutput;
+                        break;
+                    }
+                }
+
+                if ($exitCode !== 0 || $output === null) {
+                    echo json_encode(['success' => false, 'error' => 'Python chatbot is unavailable. Check that Python is installed and allowed by PHP.']);
+                    exit;
+                }
+
+                $learnResponse = json_decode($output, true);
+                if (!is_array($learnResponse) || empty($learnResponse['learned'])) {
+                    echo json_encode(['success' => false, 'error' => $learnResponse['error'] ?? 'The chatbot could not save that lesson.']);
+                    exit;
+                }
+
+                echo json_encode([
+                    'success' => true,
+                    'updated' => $learnResponse['updated'] ?? false,
+                    'reply' => 'Got it. I learned that answer and will use it next time.'
+                ]);
+            }
+            break;
+
         case 'update_order_status':
             if ($method === 'POST') {
                 $input = json_decode(file_get_contents('php://input'), true);
