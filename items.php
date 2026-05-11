@@ -168,6 +168,7 @@ $totalItems = array_sum($categoryCounts);
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Yellow Hauz POS - Manage Food Items</title>
+    <link rel="icon" type="image/svg+xml" href="images/favicon.svg">
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,500&display=swap" rel="stylesheet">
     <!-- Font Awesome -->
@@ -255,13 +256,13 @@ $totalItems = array_sum($categoryCounts);
             <!-- Bottom Users / Logout -->
             <div class="space-y-4">
                 <div class="space-y-3 px-2">
-                    <div class="flex items-center gap-3 cursor-pointer p-2 rounded-xl hover:bg-gray-100">
+                    <a href="profile.php" class="flex items-center gap-3 cursor-pointer p-2 rounded-xl hover:bg-gray-100">
                         <div class="w-8 h-8 rounded-full bg-brand text-brand-black flex items-center justify-center text-xs font-bold relative">
                             <?php echo strtoupper(substr($currentUser['full_name'], 0, 2)); ?>
                             <span class="absolute top-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white rounded-full"></span>
                         </div>
                         <span class="text-sm font-medium nav-text"><?php echo htmlspecialchars($currentUser['full_name']); ?></span>
-                    </div>
+                    </a>
                 </div>
                 <hr class="border-gray-200">
                 <a href="#" onclick="showLogoutModal()" class="flex items-center gap-3 text-gray-500 hover:text-brand-black px-4 py-2 font-medium transition-all">

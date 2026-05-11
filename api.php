@@ -218,6 +218,12 @@ try {
                 $input = json_decode(file_get_contents('php://input'), true);
                 $orderId = (int)$input['order_id'];
                 $status = sanitize($input['status']);
+
+                $allowedStatuses = ['pending', 'processing', 'completed', 'cancelled'];
+                if (!in_array($status, $allowedStatuses, true)) {
+                    echo json_encode(['success' => false, 'error' => 'Invalid order status']);
+                    exit;
+                }
                 
                 $stmt = $pdo->prepare("UPDATE orders SET status = ? WHERE id = ?");
                 $stmt->execute([$status, $orderId]);

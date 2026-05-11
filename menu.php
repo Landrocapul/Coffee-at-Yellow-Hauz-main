@@ -76,7 +76,7 @@ $lowStockItems = $stmt->fetchAll();
 $lowStockCount = count($lowStockItems);
 
 // Recommend slow-moving items with enough stock so cashiers can suggest them.
-$stmt = $pdo->query("SELECT mi.id, mi.name, mi.quantity,
+$stmt = $pdo->query("SELECT mi.id, mi.name, mi.description, mi.price, mi.image_url, mi.temperature, mi.quantity, c.name as category_name,
                     COALESCE(SUM(CASE
                         WHEN o.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
                         AND o.status IN ('processing', 'completed')
@@ -84,10 +84,11 @@ $stmt = $pdo->query("SELECT mi.id, mi.name, mi.quantity,
                         ELSE 0
                     END), 0) as sold_30_days
                     FROM menu_items mi
+                    JOIN categories c ON mi.category_id = c.id
                     LEFT JOIN order_items oi ON oi.menu_item_id = mi.id
                     LEFT JOIN orders o ON o.id = oi.order_id
                     WHERE mi.is_available = 1 AND mi.quantity > {$lowStockThreshold}
-                    GROUP BY mi.id, mi.name, mi.quantity
+                    GROUP BY mi.id, mi.name, mi.description, mi.price, mi.image_url, mi.temperature, mi.quantity, c.name
                     ORDER BY sold_30_days ASC, mi.quantity DESC, mi.name ASC
                     LIMIT 3");
 $recommendedItems = $stmt->fetchAll();
@@ -215,6 +216,7 @@ $totalAmount = $subtotal + $taxAmount;
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Yellow Hauz POS Dashboard</title>
+    <link rel="icon" type="image/svg+xml" href="images/favicon.svg">
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,500&display=swap" rel="stylesheet">
     <!-- Font Awesome -->
@@ -301,13 +303,13 @@ $totalAmount = $subtotal + $taxAmount;
             <!-- Bottom Users / Logout -->
             <div class="space-y-4">
                 <div class="space-y-3 px-2">
-                    <div class="flex items-center gap-3 cursor-pointer p-2 rounded-xl hover:bg-gray-100">
+                    <a href="profile.php" class="flex items-center gap-3 cursor-pointer p-2 rounded-xl hover:bg-gray-100">
                         <div class="w-8 h-8 rounded-full bg-brand text-brand-black flex items-center justify-center text-xs font-bold relative">
                             <?php echo strtoupper(substr($currentUser['full_name'], 0, 2)); ?>
                             <span class="absolute top-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white rounded-full"></span>
                         </div>
                         <span class="text-sm font-medium nav-text"><?php echo htmlspecialchars($currentUser['full_name']); ?></span>
-                    </div>
+                    </a>
                 </div>
                 <hr class="border-gray-200">
                 <a href="#" onclick="showLogoutModal()" class="flex items-center gap-3 text-gray-500 hover:text-brand-black px-4 py-2 font-medium transition-all">
@@ -335,9 +337,9 @@ $totalAmount = $subtotal + $taxAmount;
 
                 <?php if (!empty($recommendedItems)): ?>
                 <div class="hidden xl:flex items-center gap-2 max-w-[420px] overflow-hidden mr-4">
-                    <div class="shrink-0 w-10 h-10 rounded-xl bg-brand-light text-brand-black border border-brand flex items-center justify-center" title="Cashier recommendations">
+                    <button type="button" onclick="showRecommendationsModal()" class="shrink-0 w-10 h-10 rounded-xl bg-brand-light text-brand-black border border-brand flex items-center justify-center hover:bg-brand hover:shadow-sm transition-colors" title="View recommendations">
                         <i class="fa-solid fa-lightbulb"></i>
-                    </div>
+                    </button>
                     <div class="flex items-center gap-2 overflow-hidden">
                         <?php foreach ($recommendedItems as $recommendedItem): ?>
                         <button type="button" onclick="addToCart(<?php echo (int)$recommendedItem['id']; ?>)" class="shrink-0 max-w-[130px] bg-white h-10 rounded-xl px-3 border border-gray-200 shadow-sm hover:border-brand hover:bg-brand-light transition-colors text-left" title="Recommend <?php echo htmlspecialchars($recommendedItem['name']); ?>">
@@ -509,6 +511,13 @@ $totalAmount = $subtotal + $taxAmount;
                     <span id="panelTotalAmount" class="font-bold text-xl text-brand-black"><?php echo formatCurrency($totalAmount); ?></span>
                 </div>
 
+                <?php if (!empty($_SESSION['cart'])): ?>
+                <button onclick="showClearCartModal()" class="w-full mb-3 bg-red-50 text-red-600 border border-red-200 py-2.5 rounded-xl font-bold text-sm hover:bg-red-600 hover:text-white transition-colors flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-trash-can"></i>
+                    Clear All
+                </button>
+                <?php endif; ?>
+
                 <div class="grid grid-cols-[1fr_auto] gap-2 mb-3">
                     <button onclick="showAmountReceivedModal()" class="bg-white text-brand-black py-3 rounded-xl font-bold text-sm hover:bg-gray-100 transition-colors border border-gray-300 flex items-center justify-center gap-2">
                         <i class="fa-solid fa-money-bill-transfer"></i>
@@ -538,6 +547,25 @@ $totalAmount = $subtotal + $taxAmount;
             </div>
         </aside>
 
+    </div>
+
+    <!-- Clear Cart Confirmation Modal -->
+    <div id="clearCartModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-200">
+            <div class="flex items-center justify-center w-16 h-16 bg-red-100 rounded-full mx-auto mb-4">
+                <i class="fa-solid fa-trash-can text-red-600 text-2xl"></i>
+            </div>
+            <h3 class="text-xl font-serif font-bold text-brand-black text-center mb-2">Clear All Items?</h3>
+            <p class="text-gray-600 text-center mb-6">This will remove every item from the order and return the quantities to stock.</p>
+            <div class="flex gap-3">
+                <button onclick="hideClearCartModal()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">
+                    Cancel
+                </button>
+                <button onclick="clearCart()" class="flex-1 bg-red-600 text-white py-3 rounded-xl font-bold hover:bg-red-700 transition-colors">
+                    Clear All
+                </button>
+            </div>
+        </div>
     </div>
 
     <!-- Stock Notification Modal -->
@@ -594,6 +622,68 @@ $totalAmount = $subtotal + $taxAmount;
             </div>
         </div>
     </div>
+
+    <?php if (!empty($recommendedItems)): ?>
+    <!-- Recommendations Modal -->
+    <div id="recommendationsModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-2xl max-w-4xl w-full mx-4 shadow-2xl border border-gray-200 max-h-[90vh] overflow-hidden flex flex-col">
+            <div class="p-6 border-b border-gray-100 flex items-start justify-between gap-4">
+                <div class="flex items-center gap-3">
+                    <div class="w-12 h-12 rounded-xl bg-brand-light text-brand-black border border-brand flex items-center justify-center">
+                        <i class="fa-solid fa-lightbulb text-xl"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-2xl font-serif font-bold text-brand-black">Recommended Items</h3>
+                        <p class="text-xs text-gray-500 mt-1">Slow-moving items with healthy stock, ready to suggest at checkout</p>
+                    </div>
+                </div>
+                <button onclick="hideRecommendationsModal()" class="w-9 h-9 rounded-full bg-gray-100 text-gray-500 hover:text-brand-black hover:bg-gray-200 transition-colors shrink-0">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <div class="p-6 overflow-y-auto">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+                    <?php foreach ($recommendedItems as $recommendedItem): ?>
+                    <div class="border border-gray-200 rounded-2xl overflow-hidden bg-white shadow-sm flex flex-col">
+                        <div class="h-48 bg-gray-100 overflow-hidden">
+                            <img src="<?php echo htmlspecialchars($recommendedItem['image_url']); ?>" alt="<?php echo htmlspecialchars($recommendedItem['name']); ?>" class="w-full h-full object-cover">
+                        </div>
+                        <div class="p-4 flex flex-col flex-1">
+                            <div class="flex items-start justify-between gap-3 mb-2">
+                                <div>
+                                    <p class="text-xs text-gray-500 font-bold uppercase tracking-wider"><?php echo htmlspecialchars($recommendedItem['category_name']); ?></p>
+                                    <h4 class="font-serif text-xl font-bold text-brand-black leading-tight mt-1"><?php echo htmlspecialchars($recommendedItem['name']); ?></h4>
+                                </div>
+                                <span class="text-[10px] text-gray-600 font-bold tracking-wider uppercase border border-gray-200 px-2 py-1 rounded bg-gray-50 shrink-0">
+                                    <?php echo strtoupper($recommendedItem['temperature']); ?>
+                                </span>
+                            </div>
+                            <p class="text-sm text-gray-500 leading-relaxed mb-4 line-clamp-3">
+                                <?php echo htmlspecialchars($recommendedItem['description'] ?: 'No description available.'); ?>
+                            </p>
+                            <div class="grid grid-cols-2 gap-3 mb-4 mt-auto">
+                                <div class="bg-gray-50 rounded-xl border border-gray-200 p-3">
+                                    <p class="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Stock</p>
+                                    <p class="font-bold text-brand-black mt-1"><?php echo (int)$recommendedItem['quantity']; ?></p>
+                                </div>
+                                <div class="bg-brand-light rounded-xl border border-brand/40 p-3">
+                                    <p class="text-[10px] text-brand-dark font-bold uppercase tracking-wider">30 days</p>
+                                    <p class="font-bold text-brand-black mt-1"><?php echo (int)$recommendedItem['sold_30_days']; ?> sold</p>
+                                </div>
+                            </div>
+                            <button type="button" onclick="addToCart(<?php echo (int)$recommendedItem['id']; ?>)" class="w-full bg-brand-black text-brand py-3 rounded-xl font-bold hover:bg-gray-800 transition-colors flex items-center justify-center gap-2">
+                                <i class="fa-solid fa-cart-plus"></i>
+                                Add <?php echo formatCurrency($recommendedItem['price']); ?>
+                            </button>
+                        </div>
+                    </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
 
     <!-- Logout Confirmation Modal -->
     <div id="logoutModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
@@ -1028,6 +1118,29 @@ $totalAmount = $subtotal + $taxAmount;
             form.submit();
         }
 
+        function showClearCartModal() {
+            document.getElementById('clearCartModal').classList.remove('hidden');
+        }
+
+        function hideClearCartModal() {
+            document.getElementById('clearCartModal').classList.add('hidden');
+        }
+
+        function clearCart() {
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = 'menu.php?category=<?php echo $selectedCategoryId; ?>';
+            
+            const actionInput = document.createElement('input');
+            actionInput.type = 'hidden';
+            actionInput.name = 'action';
+            actionInput.value = 'clear_cart';
+            
+            form.appendChild(actionInput);
+            document.body.appendChild(form);
+            form.submit();
+        }
+
         function updateQuantity(itemId, newQuantity) {
             if (newQuantity < 1) {
                 removeFromCart(itemId);
@@ -1095,6 +1208,14 @@ $totalAmount = $subtotal + $taxAmount;
         
         function hideStockNotificationModal() {
             document.getElementById('stockNotificationModal').classList.add('hidden');
+        }
+
+        function showRecommendationsModal() {
+            document.getElementById('recommendationsModal')?.classList.remove('hidden');
+        }
+
+        function hideRecommendationsModal() {
+            document.getElementById('recommendationsModal')?.classList.add('hidden');
         }
 
         function showBillModal() {

@@ -13,13 +13,21 @@ if (!isAdmin()) {
 
 // Get current user info
 $currentUser = getCurrentUser();
+$success = $_SESSION['settings_success'] ?? null;
+$error = $_SESSION['settings_error'] ?? null;
+unset($_SESSION['settings_success'], $_SESSION['settings_error']);
+
+function flashAndRedirect($type, $message) {
+    $_SESSION[$type === 'success' ? 'settings_success' : 'settings_error'] = $message;
+    redirect('settings.php');
+}
 
 // Handle settings updates
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $action = $_POST['action'];
     
     if ($action === 'update_settings') {
-        $taxRate = (float)$_POST['tax_rate'];
+        $taxRate = max(0, min(100, (float)$_POST['tax_rate']));
         $shopName = sanitize($_POST['shop_name']);
         $shopAddress = sanitize($_POST['shop_address']);
         $shopPhone = sanitize($_POST['shop_phone']);
@@ -27,15 +35,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $businessHours = sanitize($_POST['business_hours']);
         
         try {
+            if ($shopName === '') {
+                throw new Exception('Shop name is required.');
+            }
             updateSetting('tax_rate', $taxRate);
             updateSetting('shop_name', $shopName);
             updateSetting('shop_address', $shopAddress);
             updateSetting('shop_phone', $shopPhone);
             updateSetting('receipt_footer', $receiptFooter);
             updateSetting('business_hours', $businessHours);
-            $success = 'Settings updated successfully!';
-        } catch (PDOException $e) {
-            $error = 'Failed to update settings: ' . $e->getMessage();
+            flashAndRedirect('success', 'Settings updated successfully.');
+        } catch (Exception $e) {
+            flashAndRedirect('error', 'Failed to update settings: ' . $e->getMessage());
         }
     } elseif ($action === 'add_user') {
         $employeeId = sanitize($_POST['employee_id']);
@@ -45,11 +56,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $role = sanitize($_POST['role']);
         
         try {
+            if (!in_array($role, ['admin', 'cashier'], true)) {
+                throw new Exception('Invalid role selected.');
+            }
+            if ($employeeId === '' || $username === '' || $password === '' || $fullName === '') {
+                throw new Exception('Please complete all required user fields.');
+            }
             $stmt = $pdo->prepare("INSERT INTO users (employee_id, username, password, full_name, role) VALUES (?, ?, ?, ?, ?)");
             $stmt->execute([$employeeId, $username, $password, $fullName, $role]);
-            $success = 'User added successfully!';
-        } catch (PDOException $e) {
-            $error = 'Failed to add user: ' . $e->getMessage();
+            flashAndRedirect('success', 'User added successfully.');
+        } catch (Exception $e) {
+            flashAndRedirect('error', 'Failed to add user: ' . $e->getMessage());
         }
     } elseif ($action === 'update_user') {
         $userId = (int)$_POST['user_id'];
@@ -58,23 +75,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $fullName = sanitize($_POST['full_name']);
         $role = sanitize($_POST['role']);
         $status = sanitize($_POST['status']);
+        $password = $_POST['password'] ?? '';
         
         try {
-            $stmt = $pdo->prepare("UPDATE users SET employee_id = ?, username = ?, full_name = ?, role = ?, status = ? WHERE id = ?");
-            $stmt->execute([$employeeId, $username, $fullName, $role, $status, $userId]);
-            $success = 'User updated successfully!';
-        } catch (PDOException $e) {
-            $error = 'Failed to update user: ' . $e->getMessage();
+            if (!in_array($role, ['admin', 'cashier'], true) || !in_array($status, ['active', 'inactive'], true)) {
+                throw new Exception('Invalid role or status selected.');
+            }
+            if ($userId === (int)$currentUser['id'] && ($role !== 'admin' || $status !== 'active')) {
+                throw new Exception('You cannot remove your own admin access.');
+            }
+            if ($status === 'inactive' || $role !== 'admin') {
+                $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE role = 'admin' AND status = 'active' AND id != ?");
+                $stmt->execute([$userId]);
+                if ((int)$stmt->fetchColumn() === 0) {
+                    throw new Exception('At least one active admin is required.');
+                }
+            }
+            if ($password !== '') {
+                $stmt = $pdo->prepare("UPDATE users SET employee_id = ?, username = ?, password = ?, full_name = ?, role = ?, status = ? WHERE id = ?");
+                $stmt->execute([$employeeId, $username, $password, $fullName, $role, $status, $userId]);
+            } else {
+                $stmt = $pdo->prepare("UPDATE users SET employee_id = ?, username = ?, full_name = ?, role = ?, status = ? WHERE id = ?");
+                $stmt->execute([$employeeId, $username, $fullName, $role, $status, $userId]);
+            }
+            flashAndRedirect('success', 'User updated successfully.');
+        } catch (Exception $e) {
+            flashAndRedirect('error', 'Failed to update user: ' . $e->getMessage());
         }
     } elseif ($action === 'delete_user') {
         $userId = (int)$_POST['user_id'];
         
         try {
-            $stmt = $pdo->prepare("DELETE FROM users WHERE id = ?");
+            if ($userId === (int)$currentUser['id']) {
+                throw new Exception('You cannot deactivate your own account.');
+            }
+            $stmt = $pdo->prepare("SELECT role, status FROM users WHERE id = ?");
             $stmt->execute([$userId]);
-            $success = 'User deleted successfully!';
-        } catch (PDOException $e) {
-            $error = 'Failed to delete user: ' . $e->getMessage();
+            $targetUser = $stmt->fetch();
+            if (!$targetUser) {
+                throw new Exception('User not found.');
+            }
+            if ($targetUser['role'] === 'admin' && $targetUser['status'] === 'active') {
+                $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE role = 'admin' AND status = 'active' AND id != ?");
+                $stmt->execute([$userId]);
+                if ((int)$stmt->fetchColumn() === 0) {
+                    throw new Exception('At least one active admin is required.');
+                }
+            }
+            $stmt = $pdo->prepare("UPDATE users SET status = 'inactive' WHERE id = ?");
+            $stmt->execute([$userId]);
+            flashAndRedirect('success', 'User deactivated successfully.');
+        } catch (Exception $e) {
+            flashAndRedirect('error', 'Failed to deactivate user: ' . $e->getMessage());
         }
     }
 }
@@ -92,6 +144,14 @@ $settings = [
 // Get all users
 $stmt = $pdo->query("SELECT * FROM users ORDER BY role, full_name ASC");
 $users = $stmt->fetchAll();
+$userStats = [
+    'total' => count($users),
+    'active' => count(array_filter($users, fn($user) => $user['status'] === 'active')),
+    'admins' => count(array_filter($users, fn($user) => $user['role'] === 'admin' && $user['status'] === 'active')),
+    'cashiers' => count(array_filter($users, fn($user) => $user['role'] === 'cashier' && $user['status'] === 'active')),
+];
+$stmt = $pdo->query("SELECT MAX(updated_at) as updated_at FROM settings");
+$settingsUpdatedAt = $stmt->fetch()['updated_at'] ?? null;
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -99,6 +159,7 @@ $users = $stmt->fetchAll();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Yellow Hauz POS - Settings</title>
+    <link rel="icon" type="image/svg+xml" href="images/favicon.svg">
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,500&display=swap" rel="stylesheet">
     <!-- Font Awesome -->
@@ -183,13 +244,13 @@ $users = $stmt->fetchAll();
             <!-- Bottom Users / Logout -->
             <div class="space-y-4">
                 <div class="space-y-3 px-2">
-                    <div class="flex items-center gap-3 cursor-pointer p-2 rounded-xl hover:bg-gray-100">
+                    <a href="profile.php" class="flex items-center gap-3 cursor-pointer p-2 rounded-xl hover:bg-gray-100">
                         <div class="w-8 h-8 rounded-full bg-brand text-brand-black flex items-center justify-center text-xs font-bold relative">
                             <?php echo strtoupper(substr($currentUser['full_name'], 0, 2)); ?>
                             <span class="absolute top-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white rounded-full"></span>
                         </div>
                         <span class="text-sm font-medium nav-text"><?php echo htmlspecialchars($currentUser['full_name']); ?></span>
-                    </div>
+                    </a>
                 </div>
                 <hr class="border-gray-200">
                 <a href="#" onclick="showLogoutModal()" class="flex items-center gap-3 text-gray-500 hover:text-brand-black px-4 py-2 font-medium transition-all">
@@ -198,33 +259,77 @@ $users = $stmt->fetchAll();
             </div>
         </aside>
 
-        <main class="flex-1 flex flex-col relative bg-vintage-paper">
+        <main class="flex-1 min-w-0 flex flex-col relative bg-vintage-paper">
             <!-- Top Header -->
-            <header class="h-[88px] flex items-center justify-between px-8 shrink-0 border-b border-gray-200/50">
+            <header class="min-h-[88px] flex flex-wrap items-center justify-between gap-4 px-8 py-4 shrink-0 border-b border-gray-200/50">
                 <button id="sidebarToggle" class="w-10 h-10 bg-white rounded-xl shadow-sm border border-gray-200 flex items-center justify-center text-gray-500 hover:text-brand-black">
                     <i class="fa-solid fa-bars"></i>
                 </button>
                 
                 <h2 class="text-2xl font-serif font-bold text-brand-black tracking-wide">SETTINGS</h2>
                 
-                <div></div>
+                <div class="text-right">
+                    <p class="text-xs text-gray-500 font-bold uppercase tracking-wider">Last Settings Update</p>
+                    <p class="text-sm font-bold text-brand-black"><?php echo $settingsUpdatedAt ? date('M d, Y h:i A', strtotime($settingsUpdatedAt)) : 'Not recorded'; ?></p>
+                </div>
             </header>
 
-            <div class="flex-1 overflow-y-auto px-8 pb-8 pt-6">
+            <div class="flex-1 min-w-0 overflow-y-auto px-8 pb-8 pt-6">
+                <?php if ($success): ?>
+                <div class="mb-6 bg-green-50 border border-green-200 text-green-700 rounded-2xl px-5 py-4 flex items-center gap-3">
+                    <i class="fa-solid fa-circle-check"></i>
+                    <span class="font-bold text-sm"><?php echo htmlspecialchars($success); ?></span>
+                </div>
+                <?php endif; ?>
+                <?php if ($error): ?>
+                <div class="mb-6 bg-red-50 border border-red-200 text-red-700 rounded-2xl px-5 py-4 flex items-center gap-3">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                    <span class="font-bold text-sm"><?php echo htmlspecialchars($error); ?></span>
+                </div>
+                <?php endif; ?>
+
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                    <div class="bg-white rounded-2xl border border-gray-200 p-4 shadow-sm">
+                        <p class="text-xs text-gray-500 font-bold uppercase tracking-wider">Users</p>
+                        <p class="font-serif text-3xl font-bold text-brand-black mt-1"><?php echo $userStats['total']; ?></p>
+                    </div>
+                    <div class="bg-white rounded-2xl border border-gray-200 p-4 shadow-sm">
+                        <p class="text-xs text-gray-500 font-bold uppercase tracking-wider">Active</p>
+                        <p class="font-serif text-3xl font-bold text-brand-black mt-1"><?php echo $userStats['active']; ?></p>
+                    </div>
+                    <div class="bg-white rounded-2xl border border-gray-200 p-4 shadow-sm">
+                        <p class="text-xs text-gray-500 font-bold uppercase tracking-wider">Admins</p>
+                        <p class="font-serif text-3xl font-bold text-brand-black mt-1"><?php echo $userStats['admins']; ?></p>
+                    </div>
+                    <div class="bg-white rounded-2xl border border-gray-200 p-4 shadow-sm">
+                        <p class="text-xs text-gray-500 font-bold uppercase tracking-wider">Tax Rate</p>
+                        <p class="font-serif text-3xl font-bold text-brand-black mt-1"><?php echo number_format((float)$settings['tax_rate'], 2); ?>%</p>
+                    </div>
+                </div>
+
                 <!-- General Settings -->
-                <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 mb-6">
-                    <h3 class="font-serif text-xl font-bold text-brand-black mb-4">General Settings</h3>
+                <div class="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6 mb-6">
+                <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+                    <div class="flex items-center gap-3 mb-5">
+                        <div class="w-11 h-11 rounded-xl bg-brand-light text-brand-dark flex items-center justify-center border border-brand/30">
+                            <i class="fa-solid fa-store"></i>
+                        </div>
+                        <div>
+                            <h3 class="font-serif text-xl font-bold text-brand-black">General Settings</h3>
+                            <p class="text-xs text-gray-500">Business details used by receipts and checkout totals</p>
+                        </div>
+                    </div>
                     <form action="settings.php" method="POST" class="space-y-4">
                         <input type="hidden" name="action" value="update_settings">
                         
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Shop Name</label>
-                                <input type="text" name="shop_name" value="<?php echo htmlspecialchars($settings['shop_name']); ?>" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                                <input type="text" name="shop_name" value="<?php echo htmlspecialchars($settings['shop_name']); ?>" required class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
                             </div>
                             <div>
                                 <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Tax Rate (%)</label>
-                                <input type="number" step="0.01" name="tax_rate" value="<?php echo $settings['tax_rate']; ?>" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                                <input type="number" min="0" max="100" step="0.01" name="tax_rate" value="<?php echo htmlspecialchars($settings['tax_rate']); ?>" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
                             </div>
                             <div>
                                 <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Shop Address</label>
@@ -240,7 +345,7 @@ $users = $stmt->fetchAll();
                             </div>
                             <div>
                                 <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Receipt Footer</label>
-                                <input type="text" name="receipt_footer" value="<?php echo htmlspecialchars($settings['receipt_footer']); ?>" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                                <textarea name="receipt_footer" rows="2" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand resize-none"><?php echo htmlspecialchars($settings['receipt_footer']); ?></textarea>
                             </div>
                         </div>
                         
@@ -252,10 +357,42 @@ $users = $stmt->fetchAll();
                     </form>
                 </div>
 
+                <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+                    <div class="flex items-center gap-3 mb-5">
+                        <div class="w-11 h-11 rounded-xl bg-gray-100 text-gray-600 flex items-center justify-center border border-gray-200">
+                            <i class="fa-solid fa-receipt"></i>
+                        </div>
+                        <div>
+                            <h3 class="font-serif text-xl font-bold text-brand-black">Receipt Preview</h3>
+                            <p class="text-xs text-gray-500">How printed headers will read</p>
+                        </div>
+                    </div>
+                    <div class="border border-gray-200 rounded-2xl bg-gray-50 p-5 font-mono text-sm text-brand-black">
+                        <div class="text-center">
+                            <p class="font-bold text-base"><?php echo htmlspecialchars($settings['shop_name']); ?></p>
+                            <p class="text-xs text-gray-500 mt-1"><?php echo htmlspecialchars($settings['shop_address']); ?></p>
+                            <p class="text-xs text-gray-500"><?php echo htmlspecialchars($settings['shop_phone']); ?></p>
+                            <p class="text-xs text-gray-500"><?php echo htmlspecialchars($settings['business_hours']); ?></p>
+                        </div>
+                        <div class="border-t border-dashed border-gray-300 my-4"></div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between"><span>Subtotal</span><span><?php echo formatCurrency(500); ?></span></div>
+                            <div class="flex justify-between"><span>Tax <?php echo number_format((float)$settings['tax_rate'], 2); ?>%</span><span><?php echo formatCurrency(500 * ((float)$settings['tax_rate'] / 100)); ?></span></div>
+                            <div class="flex justify-between font-bold border-t border-gray-300 pt-2"><span>Total</span><span><?php echo formatCurrency(500 + (500 * ((float)$settings['tax_rate'] / 100))); ?></span></div>
+                        </div>
+                        <div class="border-t border-dashed border-gray-300 my-4"></div>
+                        <p class="text-center text-xs text-gray-500"><?php echo htmlspecialchars($settings['receipt_footer']); ?></p>
+                    </div>
+                </div>
+                </div>
+
                 <!-- User Management -->
                 <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
                     <div class="flex justify-between items-center mb-4">
-                        <h3 class="font-serif text-xl font-bold text-brand-black">User Management</h3>
+                        <div>
+                            <h3 class="font-serif text-xl font-bold text-brand-black">User Management</h3>
+                            <p class="text-xs text-gray-500 mt-1">Edit accounts, roles, and login access</p>
+                        </div>
                         <button onclick="showAddUserModal()" class="bg-brand-black text-brand px-4 py-2 rounded-xl font-bold text-sm hover:bg-gray-800 transition-colors">
                             <i class="fa-solid fa-plus mr-2"></i> Add User
                         </button>
@@ -292,8 +429,10 @@ $users = $stmt->fetchAll();
                                     <td class="py-4 px-6 text-center">
                                         <div class="flex items-center justify-center gap-2">
                                             <?php if ($user['id'] !== $currentUser['id']): ?>
-                                            <button onclick="showEditUserModal(<?php echo $user['id']; ?>)" class="text-gray-400 hover:text-brand-black transition-colors"><i class="fa-solid fa-pen"></i></button>
-                                            <button onclick="confirmDeleteUser(<?php echo $user['id']; ?>)" class="text-gray-400 hover:text-red-500 transition-colors"><i class="fa-solid fa-trash"></i></button>
+                                            <button onclick="showEditUserModal(<?php echo $user['id']; ?>)" class="w-8 h-8 rounded-lg bg-gray-100 text-gray-500 hover:text-brand-black hover:bg-brand-light transition-colors" title="Edit user"><i class="fa-solid fa-pen"></i></button>
+                                            <?php if ($user['status'] === 'active'): ?>
+                                            <button onclick="confirmDeleteUser(<?php echo $user['id']; ?>)" class="w-8 h-8 rounded-lg bg-red-50 text-red-500 hover:text-white hover:bg-red-600 transition-colors" title="Deactivate user"><i class="fa-solid fa-user-slash"></i></button>
+                                            <?php endif; ?>
                                             <?php endif; ?>
                                         </div>
                                     </td>
@@ -311,7 +450,15 @@ $users = $stmt->fetchAll();
     <!-- Add User Modal -->
     <div id="addUserModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
         <div class="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-200">
-            <h3 class="text-xl font-serif font-bold text-brand-black mb-4">Add New User</h3>
+            <div class="flex items-center gap-3 mb-5">
+                <div class="w-11 h-11 rounded-xl bg-brand-light text-brand-dark flex items-center justify-center border border-brand/30">
+                    <i class="fa-solid fa-user-plus"></i>
+                </div>
+                <div>
+                    <h3 class="text-xl font-serif font-bold text-brand-black">Add New User</h3>
+                    <p class="text-xs text-gray-500">Create a cashier or admin account</p>
+                </div>
+            </div>
             <form action="settings.php" method="POST" class="space-y-4">
                 <input type="hidden" name="action" value="add_user">
                 
@@ -355,6 +502,97 @@ $users = $stmt->fetchAll();
         </div>
     </div>
 
+    <!-- Edit User Modal -->
+    <div id="editUserModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-200">
+            <div class="flex items-start justify-between gap-4 mb-5">
+                <div class="flex items-center gap-3">
+                    <div class="w-11 h-11 rounded-xl bg-gray-100 text-gray-600 flex items-center justify-center border border-gray-200">
+                        <i class="fa-solid fa-user-gear"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-xl font-serif font-bold text-brand-black">Edit User</h3>
+                        <p class="text-xs text-gray-500">Update account access and profile details</p>
+                    </div>
+                </div>
+                <button type="button" onclick="hideEditUserModal()" class="w-9 h-9 rounded-full bg-gray-100 text-gray-500 hover:text-brand-black hover:bg-gray-200 transition-colors shrink-0">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <form action="settings.php" method="POST" class="space-y-4">
+                <input type="hidden" name="action" value="update_user">
+                <input type="hidden" id="edit_user_id" name="user_id">
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Employee ID</label>
+                        <input type="text" id="edit_employee_id" name="employee_id" required class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Username</label>
+                        <input type="text" id="edit_username" name="username" required class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Full Name</label>
+                    <input type="text" id="edit_full_name" name="full_name" required class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">New Password</label>
+                    <input type="password" name="password" placeholder="Leave blank to keep current password" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Role</label>
+                        <select id="edit_role" name="role" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                            <option value="cashier">Cashier</option>
+                            <option value="admin">Admin</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Status</label>
+                        <select id="edit_status" name="status" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                            <option value="active">Active</option>
+                            <option value="inactive">Inactive</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="flex gap-3 pt-4">
+                    <button type="button" onclick="hideEditUserModal()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">
+                        Cancel
+                    </button>
+                    <button type="submit" class="flex-1 bg-brand-black text-brand py-3 rounded-xl font-bold hover:bg-gray-800 transition-colors">
+                        Save User
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Deactivate User Confirmation Modal -->
+    <div id="deactivateUserModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-200">
+            <div class="flex items-center justify-center w-16 h-16 bg-red-100 rounded-full mx-auto mb-4">
+                <i class="fa-solid fa-user-slash text-red-600 text-2xl"></i>
+            </div>
+            <h3 class="text-xl font-serif font-bold text-brand-black text-center mb-2">Deactivate User?</h3>
+            <p id="deactivateUserMessage" class="text-gray-600 text-center mb-6">This user will no longer be able to log in.</p>
+            <div class="flex gap-3">
+                <button onclick="hideDeactivateUserModal()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">
+                    Cancel
+                </button>
+                <button onclick="submitDeactivateUser()" class="flex-1 bg-red-600 text-white py-3 rounded-xl font-bold hover:bg-red-700 transition-colors">
+                    Deactivate
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Logout Confirmation Modal -->
     <div id="logoutModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
         <div class="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-200">
@@ -375,6 +613,18 @@ $users = $stmt->fetchAll();
     </div>
 
     <script>
+        const users = <?php echo json_encode(array_map(function ($user) {
+            return [
+                'id' => (int)$user['id'],
+                'employee_id' => $user['employee_id'],
+                'username' => $user['username'],
+                'full_name' => $user['full_name'],
+                'role' => $user['role'],
+                'status' => $user['status'],
+            ];
+        }, $users)); ?>;
+        let pendingDeactivateUserId = null;
+
         function showAddUserModal() {
             document.getElementById('addUserModal').classList.remove('hidden');
         }
@@ -383,27 +633,58 @@ $users = $stmt->fetchAll();
             document.getElementById('addUserModal').classList.add('hidden');
         }
 
+        function showEditUserModal(userId) {
+            const user = users.find(item => item.id === Number(userId));
+            if (!user) return;
+
+            document.getElementById('edit_user_id').value = user.id;
+            document.getElementById('edit_employee_id').value = user.employee_id;
+            document.getElementById('edit_username').value = user.username;
+            document.getElementById('edit_full_name').value = user.full_name;
+            document.getElementById('edit_role').value = user.role;
+            document.getElementById('edit_status').value = user.status;
+            document.getElementById('editUserModal').classList.remove('hidden');
+        }
+
+        function hideEditUserModal() {
+            document.getElementById('editUserModal').classList.add('hidden');
+        }
+
         function confirmDeleteUser(userId) {
-            if (confirm('Are you sure you want to delete this user?')) {
-                const form = document.createElement('form');
-                form.method = 'POST';
-                form.action = 'settings.php';
-                
-                const actionInput = document.createElement('input');
-                actionInput.type = 'hidden';
-                actionInput.name = 'action';
-                actionInput.value = 'delete_user';
-                
-                const userIdInput = document.createElement('input');
-                userIdInput.type = 'hidden';
-                userIdInput.name = 'user_id';
-                userIdInput.value = userId;
-                
-                form.appendChild(actionInput);
-                form.appendChild(userIdInput);
-                document.body.appendChild(form);
-                form.submit();
-            }
+            const user = users.find(item => item.id === Number(userId));
+            if (!user) return;
+
+            pendingDeactivateUserId = user.id;
+            document.getElementById('deactivateUserMessage').textContent = user.full_name + ' will no longer be able to log in. Sales and order history will be kept.';
+            document.getElementById('deactivateUserModal').classList.remove('hidden');
+        }
+
+        function hideDeactivateUserModal() {
+            pendingDeactivateUserId = null;
+            document.getElementById('deactivateUserModal').classList.add('hidden');
+        }
+
+        function submitDeactivateUser() {
+            if (!pendingDeactivateUserId) return;
+
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = 'settings.php';
+            
+            const actionInput = document.createElement('input');
+            actionInput.type = 'hidden';
+            actionInput.name = 'action';
+            actionInput.value = 'delete_user';
+            
+            const userIdInput = document.createElement('input');
+            userIdInput.type = 'hidden';
+            userIdInput.name = 'user_id';
+            userIdInput.value = pendingDeactivateUserId;
+            
+            form.appendChild(actionInput);
+            form.appendChild(userIdInput);
+            document.body.appendChild(form);
+            form.submit();
         }
 
         function showLogoutModal() {
