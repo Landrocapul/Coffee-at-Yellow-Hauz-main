@@ -51,7 +51,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     } elseif ($action === 'add_user') {
         $employeeId = sanitize($_POST['employee_id']);
         $username = sanitize($_POST['username']);
-        $password = $_POST['password'];
+        $password = preg_replace('/\D/', '', $_POST['password']);
         $fullName = sanitize($_POST['full_name']);
         $role = sanitize($_POST['role']);
         
@@ -61,6 +61,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
             if ($employeeId === '' || $username === '' || $password === '' || $fullName === '') {
                 throw new Exception('Please complete all required user fields.');
+            }
+            if (strlen($password) < 4 || strlen($password) > 8) {
+                throw new Exception('PIN must be 4 to 8 digits.');
             }
             $stmt = $pdo->prepare("INSERT INTO users (employee_id, username, password, full_name, role) VALUES (?, ?, ?, ?, ?)");
             $stmt->execute([$employeeId, $username, $password, $fullName, $role]);
@@ -75,11 +78,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $fullName = sanitize($_POST['full_name']);
         $role = sanitize($_POST['role']);
         $status = sanitize($_POST['status']);
-        $password = $_POST['password'] ?? '';
+        $password = preg_replace('/\D/', '', $_POST['password'] ?? '');
         
         try {
             if (!in_array($role, ['admin', 'cashier'], true) || !in_array($status, ['active', 'inactive'], true)) {
                 throw new Exception('Invalid role or status selected.');
+            }
+            if ($password !== '' && (strlen($password) < 4 || strlen($password) > 8)) {
+                throw new Exception('PIN must be 4 to 8 digits.');
             }
             if ($userId === (int)$currentUser['id'] && ($role !== 'admin' || $status !== 'active')) {
                 throw new Exception('You cannot remove your own admin access.');
@@ -478,8 +484,8 @@ $settingsUpdatedAt = $stmt->fetch()['updated_at'] ?? null;
                 </div>
                 
                 <div>
-                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Password</label>
-                    <input type="password" name="password" required class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">PIN</label>
+                    <input type="password" name="password" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" required class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
                 </div>
                 
                 <div>
@@ -541,8 +547,8 @@ $settingsUpdatedAt = $stmt->fetch()['updated_at'] ?? null;
                 </div>
 
                 <div>
-                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">New Password</label>
-                    <input type="password" name="password" placeholder="Leave blank to keep current password" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">New PIN</label>
+                    <input type="password" name="password" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" placeholder="Leave blank to keep current PIN" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
                 </div>
                 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">

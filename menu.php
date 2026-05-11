@@ -13,21 +13,75 @@ $currentUser = getCurrentUser();
 $stmt = $pdo->query("SELECT * FROM categories WHERE status = 'active' ORDER BY sort_order ASC");
 $categories = $stmt->fetchAll();
 
-// Get selected category (default to first category)
-$selectedCategoryId = isset($_GET['category']) ? (int)$_GET['category'] : (isset($categories[0]['id']) ? $categories[0]['id'] : 0);
+function categoryMenuType($categoryName) {
+    $name = strtolower($categoryName);
+    $foodKeywords = ['food', 'rice', 'breakfast', 'pasta', 'starter', 'salad', 'pizza', 'sandwich', 'sandwiches', 'dessert', 'desserts', 'pastry', 'pastries', 'cake', 'cookie', 'bread', 'meal', 'snack'];
+
+    foreach ($foodKeywords as $keyword) {
+        if (strpos($name, $keyword) !== false) {
+            return 'food';
+        }
+    }
+
+    return 'drinks';
+}
+
+$menuType = $_GET['type'] ?? 'drinks';
+if (!in_array($menuType, ['drinks', 'food'], true)) {
+    $menuType = 'drinks';
+}
+
+$categoriesByType = [
+    'drinks' => [],
+    'food' => [],
+];
+
+foreach ($categories as $category) {
+    $categoriesByType[categoryMenuType($category['name'])][] = $category;
+}
+
+$visibleCategories = $categoriesByType[$menuType];
+if (empty($visibleCategories)) {
+    $visibleCategories = $categories;
+}
+
+// Get selected category (default to first category in the selected menu type)
+$selectedCategoryId = isset($_GET['category']) ? (int)$_GET['category'] : (isset($visibleCategories[0]['id']) ? (int)$visibleCategories[0]['id'] : 0);
+if ($selectedCategoryId > 0) {
+    $selectedCategoryType = null;
+    foreach ($categories as $category) {
+        if ((int)$category['id'] === $selectedCategoryId) {
+            $selectedCategoryType = categoryMenuType($category['name']);
+            break;
+        }
+    }
+
+    if ($selectedCategoryType !== null && $selectedCategoryType !== $menuType && !empty($visibleCategories)) {
+        $selectedCategoryId = (int)$visibleCategories[0]['id'];
+    }
+}
+
 $searchTerm = sanitize($_GET['search'] ?? '');
+$visibleCategoryIds = array_map(fn($category) => (int)$category['id'], $visibleCategories);
 
 // Get menu items for selected category
 $menuItems = [];
 if ($searchTerm !== '') {
     $searchLike = '%' . $searchTerm . '%';
+    $typeWhereSql = '';
+    $typeParams = [];
+    if (!empty($visibleCategoryIds)) {
+        $typeWhereSql = ' AND mi.category_id IN (' . implode(',', array_fill(0, count($visibleCategoryIds), '?')) . ')';
+        $typeParams = $visibleCategoryIds;
+    }
     $stmt = $pdo->prepare("SELECT mi.*, c.name as category_name, c.icon as category_icon 
                           FROM menu_items mi 
                           JOIN categories c ON mi.category_id = c.id 
                           WHERE mi.is_available = 1 
+                          {$typeWhereSql}
                           AND (mi.name LIKE ? OR mi.description LIKE ? OR c.name LIKE ?)
                           ORDER BY c.sort_order ASC, mi.sort_order ASC");
-    $stmt->execute([$searchLike, $searchLike, $searchLike]);
+    $stmt->execute(array_merge($typeParams, [$searchLike, $searchLike, $searchLike]));
     $menuItems = $stmt->fetchAll();
 } elseif ($selectedCategoryId > 0) {
     $stmt = $pdo->prepare("SELECT mi.*, c.name as category_name, c.icon as category_icon 
@@ -198,7 +252,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $_SESSION['cart'] = [];
     }
     
-    redirect('menu.php?category=' . $selectedCategoryId);
+    redirect('menu.php?type=' . urlencode($menuType) . '&category=' . $selectedCategoryId);
 }
 
 // Calculate cart totals
@@ -326,10 +380,11 @@ $totalAmount = $subtotal + $taxAmount;
                 </button>
                 
                 <form method="GET" action="menu.php" class="flex-1 max-w-2xl mx-6 relative">
+                    <input type="hidden" name="type" value="<?php echo htmlspecialchars($menuType); ?>">
                     <i class="fa-solid fa-search absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"></i>
                     <input type="text" name="search" value="<?php echo htmlspecialchars($searchTerm); ?>" placeholder="Search coffee, pastries, etc..." class="w-full bg-white h-12 rounded-full pl-12 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-brand shadow-sm border border-gray-200">
                     <?php if ($searchTerm !== ''): ?>
-                    <a href="menu.php?category=<?php echo (int)$selectedCategoryId; ?>" class="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-brand-black transition-colors">
+                    <a href="menu.php?type=<?php echo htmlspecialchars($menuType); ?>&category=<?php echo (int)$selectedCategoryId; ?>" class="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-brand-black transition-colors">
                         <i class="fa-solid fa-xmark"></i>
                     </a>
                     <?php endif; ?>
@@ -364,7 +419,17 @@ $totalAmount = $subtotal + $taxAmount;
             <div class="flex-1 overflow-y-auto px-8 pb-32 pt-6 flex gap-6">
                 <!-- Categories Sidebar -->
                 <div class="flex flex-col gap-3 shrink-0">
-                    <?php foreach ($categories as $category): ?>
+                    <div class="bg-white border border-gray-200 rounded-2xl p-1.5 shadow-sm flex flex-col gap-1">
+                        <button type="button" onclick="selectMenuType('drinks')" class="w-full h-11 rounded-xl flex items-center justify-center gap-2 text-xs font-bold <?php echo $menuType === 'drinks' ? 'bg-brand text-brand-black' : 'text-gray-500 hover:bg-gray-50 hover:text-brand-black'; ?> transition-colors">
+                            <i class="fa-solid fa-mug-saucer"></i>
+                            Drinks
+                        </button>
+                        <button type="button" onclick="selectMenuType('food')" class="w-full h-11 rounded-xl flex items-center justify-center gap-2 text-xs font-bold <?php echo $menuType === 'food' ? 'bg-brand text-brand-black' : 'text-gray-500 hover:bg-gray-50 hover:text-brand-black'; ?> transition-colors">
+                            <i class="fa-solid fa-utensils"></i>
+                            Food
+                        </button>
+                    </div>
+                    <?php foreach ($visibleCategories as $category): ?>
                     <div class="w-[100px] h-[100px] <?php echo $category['id'] == $selectedCategoryId ? 'bg-brand text-brand-black' : 'bg-white'; ?> rounded-2xl flex flex-col items-center justify-center cursor-pointer shadow-sm border <?php echo $category['id'] == $selectedCategoryId ? 'border-brand/30' : 'border-gray-200 hover:border-brand'; ?> transition-all" onclick="selectCategory(<?php echo $category['id']; ?>)">
                         <div class="w-10 h-10 mb-1 flex items-center justify-center text-xl"><i class="<?php echo htmlspecialchars($category['icon']); ?>"></i></div>
                         <span class="font-bold text-xs text-center leading-tight"><?php echo htmlspecialchars($category['name']); ?></span>
@@ -1072,14 +1137,18 @@ $totalAmount = $subtotal + $taxAmount;
             }
         });
 
+        function selectMenuType(type) {
+            window.location.href = 'menu.php?type=' + encodeURIComponent(type);
+        }
+
         function selectCategory(categoryId) {
-            window.location.href = 'menu.php?category=' + categoryId;
+            window.location.href = 'menu.php?type=<?php echo htmlspecialchars($menuType); ?>&category=' + categoryId;
         }
 
         function addToCart(itemId) {
             const form = document.createElement('form');
             form.method = 'POST';
-            form.action = 'menu.php?category=<?php echo $selectedCategoryId; ?>';
+            form.action = 'menu.php?type=<?php echo htmlspecialchars($menuType); ?>&category=<?php echo $selectedCategoryId; ?>';
             
             const actionInput = document.createElement('input');
             actionInput.type = 'hidden';
@@ -1106,7 +1175,7 @@ $totalAmount = $subtotal + $taxAmount;
         function clearCartNoReturn() {
             const form = document.createElement('form');
             form.method = 'POST';
-            form.action = 'menu.php?category=<?php echo $selectedCategoryId; ?>';
+            form.action = 'menu.php?type=<?php echo htmlspecialchars($menuType); ?>&category=<?php echo $selectedCategoryId; ?>';
             
             const actionInput = document.createElement('input');
             actionInput.type = 'hidden';
@@ -1129,7 +1198,7 @@ $totalAmount = $subtotal + $taxAmount;
         function clearCart() {
             const form = document.createElement('form');
             form.method = 'POST';
-            form.action = 'menu.php?category=<?php echo $selectedCategoryId; ?>';
+            form.action = 'menu.php?type=<?php echo htmlspecialchars($menuType); ?>&category=<?php echo $selectedCategoryId; ?>';
             
             const actionInput = document.createElement('input');
             actionInput.type = 'hidden';
@@ -1149,7 +1218,7 @@ $totalAmount = $subtotal + $taxAmount;
             
             const form = document.createElement('form');
             form.method = 'POST';
-            form.action = 'menu.php?category=<?php echo $selectedCategoryId; ?>';
+            form.action = 'menu.php?type=<?php echo htmlspecialchars($menuType); ?>&category=<?php echo $selectedCategoryId; ?>';
             
             const actionInput = document.createElement('input');
             actionInput.type = 'hidden';
@@ -1176,7 +1245,7 @@ $totalAmount = $subtotal + $taxAmount;
         function removeFromCart(itemId) {
             const form = document.createElement('form');
             form.method = 'POST';
-            form.action = 'menu.php?category=<?php echo $selectedCategoryId; ?>';
+            form.action = 'menu.php?type=<?php echo htmlspecialchars($menuType); ?>&category=<?php echo $selectedCategoryId; ?>';
             
             const actionInput = document.createElement('input');
             actionInput.type = 'hidden';

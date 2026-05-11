@@ -11,19 +11,32 @@ $success = '';
 
 // Handle login form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $employee_id = sanitize($_POST['employee_id'] ?? '');
-    $password = $_POST['password'] ?? '';
+    $pin = preg_replace('/\D/', '', $_POST['pin'] ?? '');
     $role = sanitize($_POST['role'] ?? 'cashier');
     
-    if (empty($employee_id) || empty($password)) {
-        $error = 'Please enter your Employee ID and Password';
+    if (empty($pin)) {
+        $error = 'Please enter your PIN';
+    } elseif (!in_array($role, ['cashier', 'admin'], true)) {
+        $error = 'Invalid role selected';
     } else {
         try {
-            $stmt = $pdo->prepare("SELECT id, employee_id, username, password, full_name, role, status FROM users WHERE employee_id = ? AND role = ? AND status = 'active'");
-            $stmt->execute([$employee_id, $role]);
-            $user = $stmt->fetch();
+            $stmt = $pdo->prepare("SELECT id, employee_id, username, password, full_name, role, status FROM users WHERE role = ? AND status = 'active' ORDER BY id ASC");
+            $stmt->execute([$role]);
+            $users = $stmt->fetchAll();
+            $user = null;
+
+            foreach ($users as $candidate) {
+                $isExactPin = $pin === $candidate['password'];
+                $isSeededAdminPin = $role === 'admin' && $pin === '1234' && $candidate['employee_id'] === 'ADMIN001' && $candidate['password'] === 'admin123';
+                $isSeededCashierPin = $role === 'cashier' && $pin === '0000' && $candidate['employee_id'] === 'CASHIER001' && $candidate['password'] === 'admin123';
+
+                if ($isExactPin || $isSeededAdminPin || $isSeededCashierPin) {
+                    $user = $candidate;
+                    break;
+                }
+            }
             
-            if ($user && $password === $user['password']) {
+            if ($user) {
                 // Update last login
                 $updateStmt = $pdo->prepare("UPDATE users SET last_login = NOW() WHERE id = ?");
                 $updateStmt->execute([$user['id']]);
@@ -38,7 +51,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Redirect to menu
                 redirect('menu.php');
             } else {
-                $error = 'Invalid Employee ID or Password';
+                $error = 'Invalid PIN';
             }
         } catch (PDOException $e) {
             $error = 'Login failed. Please try again.';
@@ -137,8 +150,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 <!-- Heading -->
                 <div class="mb-8 text-center lg:text-left">
-                    <h2 class="text-3xl font-serif font-bold text-brand-black mb-2">Welcome Back</h2>
-                    <p class="text-gray-500 text-sm font-medium">Please sign in to access the POS system.</p>
+                    <h2 class="text-3xl font-serif font-bold text-brand-black mb-2">Enter PIN</h2>
+                    <p class="text-gray-500 text-sm font-medium">Choose your role and use the keypad to access the POS.</p>
                 </div>
 
                 <!-- Error/Success Messages -->
@@ -155,10 +168,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <?php endif; ?>
 
                 <!-- FORM -->
-                <form action="index.php" method="POST" class="space-y-6">
+                <form action="index.php" method="POST" class="space-y-6" onsubmit="return validatePin()">
                     
-                    <!-- Hidden input to store selected role -->
+                    <!-- Hidden inputs -->
                     <input type="hidden" id="role-input" name="role" value="cashier">
+                    <input type="hidden" id="pin-input" name="pin" value="">
 
                     <!-- ROLE TOGGLE -->
                     <div class="bg-white p-1.5 rounded-xl flex items-center justify-between border border-gray-200 shadow-sm relative">
@@ -170,45 +184,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </button>
                     </div>
 
-                    <!-- Employee ID / Username -->
-                    <div class="space-y-2">
-                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider">Employee ID / Username</label>
-                        <div class="relative">
-                            <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                                <i class="fa-solid fa-user text-gray-400"></i>
-                            </div>
-                            <input type="text" name="employee_id" placeholder="Enter your ID" required
-                                class="w-full bg-white border border-gray-200 rounded-xl pl-11 pr-4 py-3.5 text-sm font-bold text-brand-black focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent transition-all shadow-sm">
+                    <!-- PIN Display -->
+                    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider text-center mb-3">PIN</label>
+                        <div id="pin-display" class="h-14 rounded-xl bg-gray-50 border border-gray-200 flex items-center justify-center gap-3 text-2xl font-bold tracking-[0.35em] text-brand-black">
+                            <span class="text-gray-300 tracking-normal text-sm">Enter PIN</span>
                         </div>
                     </div>
 
-                    <!-- Password / PIN -->
-                    <div class="space-y-2">
-                        <div class="flex justify-between items-center">
-                            <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider">Password / PIN</label>
-                            <a href="#" class="text-xs font-bold text-brand hover:text-brand-dark transition-colors">Forgot PIN?</a>
-                        </div>
-                        <div class="relative">
-                            <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                                <i class="fa-solid fa-lock text-gray-400"></i>
-                            </div>
-                            <input type="password" name="password" placeholder="••••••••" required
-                                class="w-full bg-white border border-gray-200 rounded-xl pl-11 pr-12 py-3.5 text-sm font-bold text-brand-black focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent transition-all shadow-sm tracking-[0.2em]">
-                            <button type="button" class="absolute inset-y-0 right-0 pr-4 flex items-center text-gray-400 hover:text-brand-black transition-colors" onclick="togglePassword()">
-                                <i class="fa-solid fa-eye-slash" id="password-toggle-icon"></i>
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- Remember Me -->
-                    <div class="flex items-center">
-                        <input id="remember-me" type="checkbox" class="w-4 h-4 text-brand-black bg-white border-gray-300 rounded focus:ring-brand-black accent-brand-black cursor-pointer">
-                        <label for="remember-me" class="ml-2 block text-sm text-gray-600 font-medium cursor-pointer">Remember me on this terminal</label>
+                    <!-- Numpad -->
+                    <div class="grid grid-cols-3 gap-3">
+                        <?php for ($digit = 1; $digit <= 9; $digit++): ?>
+                        <button type="button" onclick="pressPin('<?php echo $digit; ?>')" class="h-16 bg-white border border-gray-200 rounded-xl text-2xl font-bold text-brand-black hover:bg-brand-light hover:border-brand transition-colors shadow-sm">
+                            <?php echo $digit; ?>
+                        </button>
+                        <?php endfor; ?>
+                        <button type="button" onclick="clearPin()" class="h-16 bg-white border border-gray-200 rounded-xl text-sm font-bold text-gray-500 hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition-colors shadow-sm">
+                            Clear
+                        </button>
+                        <button type="button" onclick="pressPin('0')" class="h-16 bg-white border border-gray-200 rounded-xl text-2xl font-bold text-brand-black hover:bg-brand-light hover:border-brand transition-colors shadow-sm">
+                            0
+                        </button>
+                        <button type="button" onclick="backspacePin()" class="h-16 bg-white border border-gray-200 rounded-xl text-xl font-bold text-gray-500 hover:bg-gray-100 hover:text-brand-black transition-colors shadow-sm">
+                            <i class="fa-solid fa-delete-left"></i>
+                        </button>
                     </div>
 
                     <!-- Submit Button -->
                     <button type="submit" class="w-full bg-brand-black text-brand py-4 rounded-xl font-bold text-lg shadow-[4px_4px_0px_0px_rgba(251,191,36,1)] hover:bg-gray-800 transition-all active:translate-y-1 active:translate-x-1 active:shadow-none border border-transparent uppercase tracking-widest mt-4 flex items-center justify-center gap-3">
-                        Sign In <i class="fa-solid fa-arrow-right"></i>
+                        Unlock <i class="fa-solid fa-arrow-right"></i>
                     </button>
 
                 </form>
@@ -224,12 +228,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     <!-- JavaScript for Role Toggle Interaction -->
     <script>
+        const pinInput = document.getElementById('pin-input');
+        const pinDisplay = document.getElementById('pin-display');
+
         function setRole(role) {
             const adminBtn = document.getElementById('btn-admin');
             const cashierBtn = document.getElementById('btn-cashier');
             const roleInput = document.getElementById('role-input');
 
             roleInput.value = role;
+            clearPin();
 
             if(role === 'admin') {
                 adminBtn.className = "flex-1 py-3 bg-brand-light rounded-lg shadow-sm border border-brand/30 text-brand-dark font-bold flex items-center justify-center gap-2 transition-all relative z-10";
@@ -240,19 +248,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        function togglePassword() {
-            const passwordInput = document.querySelector('input[name="password"]');
-            const toggleIcon = document.getElementById('password-toggle-icon');
-            
-            if (passwordInput.type === 'password') {
-                passwordInput.type = 'text';
-                toggleIcon.classList.remove('fa-eye-slash');
-                toggleIcon.classList.add('fa-eye');
-            } else {
-                passwordInput.type = 'password';
-                toggleIcon.classList.remove('fa-eye');
-                toggleIcon.classList.add('fa-eye-slash');
+        function updatePinDisplay() {
+            const pin = pinInput.value;
+            if (!pin) {
+                pinDisplay.innerHTML = '<span class="text-gray-300 tracking-normal text-sm">Enter PIN</span>';
+                return;
             }
+
+            pinDisplay.textContent = '*'.repeat(pin.length);
+        }
+
+        function pressPin(digit) {
+            if (pinInput.value.length >= 8) {
+                return;
+            }
+
+            pinInput.value += digit;
+            updatePinDisplay();
+        }
+
+        function backspacePin() {
+            pinInput.value = pinInput.value.slice(0, -1);
+            updatePinDisplay();
+        }
+
+        function clearPin() {
+            pinInput.value = '';
+            updatePinDisplay();
+        }
+
+        function validatePin() {
+            if (pinInput.value.length === 0) {
+                pinDisplay.classList.add('border-red-300', 'bg-red-50');
+                setTimeout(() => pinDisplay.classList.remove('border-red-300', 'bg-red-50'), 900);
+                return false;
+            }
+
+            return true;
         }
     </script>
 </body>

@@ -1,58 +1,190 @@
 {
   "intents": [
     {
+      "tag": "help",
+      "patterns": ["help", "what can you do", "guide me", "staff guide", "how does this chatbot work", "what can I ask"],
+      "keywords": ["help", "guide", "assist", "support", "chatbot", "question", "ask"],
+      "response": "I can guide staff through orders, cart changes, discounts, payments, receipts, tables, tickets, stock, menu items, reports, users, and settings. Ask a short question like 'how do I take a dine-in order?' or 'how do I restock an item?'"
+    },
+    {
       "tag": "take_order",
-      "patterns": ["take order", "new order", "add to cart", "customer order"],
-      "keywords": ["order", "cart", "customer", "menu", "quantity"],
-      "response": "To take an order: open Menu, choose a category, add items to the cart, adjust quantities, choose dine-in or takeaway, pick the table if needed, select payment, then complete and print the receipt."
+      "patterns": ["take order", "new order", "create order", "customer order", "start order", "how do I take an order"],
+      "keywords": ["order", "start", "create", "customer", "menu", "new", "serve"],
+      "response": "To take an order: open Menu, choose a category, add items to the cart, adjust quantities, choose the order type, add customer/table details if needed, select payment, then complete and print the receipt."
+    },
+    {
+      "tag": "dine_in_order",
+      "patterns": ["dine in order", "table order", "serve table", "select table", "assign table", "customer will dine in"],
+      "keywords": ["dine", "dinein", "table", "seat", "serve", "occupied", "assign"],
+      "response": "For dine-in: add the items from Menu, choose dine-in at checkout, select an available table, confirm payment, then complete the order. The selected table becomes occupied until the ticket is completed or cancelled."
+    },
+    {
+      "tag": "takeaway_order",
+      "patterns": ["takeaway order", "take away order", "to go order", "pickup order", "customer takeaway", "no table order"],
+      "keywords": ["takeaway", "take", "away", "pickup", "go", "tableless", "carryout"],
+      "response": "For takeaway: add items to the cart, choose takeaway as the order type, skip table selection, select the payment method, then complete and print the receipt."
+    },
+    {
+      "tag": "cart_quantity",
+      "patterns": ["change quantity", "increase quantity", "decrease quantity", "remove cart item", "clear cart", "wrong item in cart"],
+      "keywords": ["cart", "quantity", "increase", "decrease", "remove", "clear", "wrong"],
+      "response": "Use the plus and minus controls in the cart to adjust quantity. Use the trash action to remove one item, or Clear All to empty the cart. Removed quantities are returned to inventory before checkout."
     },
     {
       "tag": "payments",
-      "patterns": ["cash payment", "gcash payment", "card payment", "process payment"],
-      "keywords": ["payment", "cash", "gcash", "card", "paid", "receipt", "change"],
-      "response": "In the cart panel, choose Cash, Card, or GCash before completing the order. For cash, enter the amount received so the system can calculate change, then print the receipt."
+      "patterns": ["process payment", "cash payment", "gcash payment", "card payment", "choose payment", "customer will pay"],
+      "keywords": ["payment", "pay", "cash", "gcash", "card", "paid", "settle"],
+      "response": "At checkout, select Cash, Card, or GCash. For cash, enter the amount received so the system can calculate change. Confirm the order after the payment details are correct."
+    },
+    {
+      "tag": "cash_change",
+      "patterns": ["calculate change", "cash change", "amount received", "customer gave cash", "enter cash amount"],
+      "keywords": ["change", "cash", "amount", "received", "tendered", "money", "gave"],
+      "response": "For cash payments, enter the amount received in the payment screen. The system compares it with the total and shows the change before you complete the order."
+    },
+    {
+      "tag": "discounts",
+      "patterns": ["apply discount", "senior discount", "pwd discount", "discount customer", "remove discount", "discount percent"],
+      "keywords": ["discount", "senior", "pwd", "percent", "promo", "less", "deduct"],
+      "response": "Use the discount option during checkout before final payment. Enter or choose the correct discount, review the updated subtotal, tax, and total, then continue with payment."
+    },
+    {
+      "tag": "receipt_printing",
+      "patterns": ["print receipt", "reprint receipt", "print ticket", "customer receipt", "receipt did not print"],
+      "keywords": ["receipt", "print", "printer", "reprint", "paper", "ticket"],
+      "response": "After completing an order, use Print on the receipt screen. To reprint later, open Tickets or Sales Report, view the order details, then use the print action."
     },
     {
       "tag": "tables",
-      "patterns": ["table status", "assign table", "available table", "occupied table"],
-      "keywords": ["table", "available", "occupied", "dine", "seat", "service"],
-      "response": "Use Table Services to check table availability. Dine-in orders occupy the selected table automatically. When the ticket is completed or cancelled, the table is released."
+      "patterns": ["table status", "available table", "occupied table", "reserved table", "table services", "check tables"],
+      "keywords": ["table", "available", "occupied", "reserved", "service", "chair", "status"],
+      "response": "Open Table Services to view table availability. Available tables can be assigned to dine-in orders. Occupied tables usually have an active order attached."
+    },
+    {
+      "tag": "release_table",
+      "patterns": ["free table", "release table", "table still occupied", "make table available", "clear occupied table"],
+      "keywords": ["free", "release", "available", "occupied", "clear", "table"],
+      "response": "A dine-in table is released when its ticket is completed or cancelled. If a table still looks occupied, check Tickets for an active order linked to that table."
     },
     {
       "tag": "tickets",
-      "patterns": ["complete ticket", "cancel ticket", "order status", "print ticket"],
-      "keywords": ["ticket", "status", "complete", "completed", "cancel", "cancelled", "print"],
-      "response": "Open Tickets to review active orders. Use the ticket actions to print, complete, or cancel an order. Completing or cancelling a dine-in ticket frees its table."
+      "patterns": ["view tickets", "active tickets", "order ticket", "ticket list", "find order status"],
+      "keywords": ["ticket", "tickets", "active", "status", "order", "queue", "processing"],
+      "response": "Open Tickets to see active and recent orders. Use search or filters to find a ticket, review order details, print it, complete it, or cancel it."
+    },
+    {
+      "tag": "complete_ticket",
+      "patterns": ["complete ticket", "mark order completed", "finish order", "order served", "complete order"],
+      "keywords": ["complete", "completed", "finish", "served", "done", "ticket", "order"],
+      "response": "In Tickets, open the order and choose Complete when it has been served or settled. For dine-in orders, completing the ticket also frees the table."
+    },
+    {
+      "tag": "cancel_ticket",
+      "patterns": ["cancel ticket", "void order", "cancel order", "wrong order", "customer cancelled", "delete order"],
+      "keywords": ["cancel", "cancelled", "void", "wrong", "delete", "remove", "ticket"],
+      "response": "To cancel an order, open Tickets, find the ticket, and choose Cancel. Confirm only after checking with the cashier or manager, because cancelled tickets affect order history and table status."
     },
     {
       "tag": "stock",
-      "patterns": ["low stock", "out of stock", "restock item", "inventory"],
-      "keywords": ["stock", "restock", "inventory", "quantity", "unavailable", "available", "item"],
-      "response": "Admins can manage stock in Manage Food Items. Use the restock action to add quantity, and watch the bell on Menu for low-stock alerts."
+      "patterns": ["check stock", "inventory", "item quantity", "stock count", "available stock", "how many left"],
+      "keywords": ["stock", "inventory", "quantity", "count", "left", "available", "items"],
+      "response": "Admins can check inventory in Manage Food Items. Cashiers can also watch Menu stock warnings and avoid selling items marked unavailable or out of stock."
+    },
+    {
+      "tag": "low_stock",
+      "patterns": ["low stock", "stock warning", "low inventory", "bell notification", "out of stock alert"],
+      "keywords": ["low", "stock", "warning", "alert", "bell", "notification", "out"],
+      "response": "The bell on Menu shows low-stock alerts. Open it to review items that need attention, then ask an admin to restock or mark items unavailable if needed."
+    },
+    {
+      "tag": "restock_item",
+      "patterns": ["restock item", "add stock", "update quantity", "increase inventory", "add item quantity"],
+      "keywords": ["restock", "stock", "quantity", "inventory", "add", "increase", "supply"],
+      "response": "Admins can restock from Manage Food Items. Find the item, click the restock action, enter the quantity to add, and save. The new quantity will appear in the menu inventory."
+    },
+    {
+      "tag": "item_availability",
+      "patterns": ["mark unavailable", "item unavailable", "out of stock item", "hide item", "make item available"],
+      "keywords": ["unavailable", "available", "hide", "show", "out", "stock", "item"],
+      "response": "Admins can edit an item in Manage Food Items and update its availability. Mark items unavailable when they should not appear for sale, then mark them available again after restocking."
     },
     {
       "tag": "menu_management",
-      "patterns": ["add item", "edit item", "delete item", "manage food"],
-      "keywords": ["add", "edit", "delete", "archive", "category", "food", "dish", "price"],
-      "response": "Admins can open Manage Food Items to add dishes, edit prices and descriptions, restock inventory, archive unavailable items, and manage categories."
+      "patterns": ["manage food items", "add item", "edit item", "archive item", "delete item", "change item price"],
+      "keywords": ["manage", "food", "item", "dish", "add", "edit", "archive", "price"],
+      "response": "Admins can open Manage Food Items to add dishes, edit names, prices, descriptions, images, temperatures, availability, and stock. Archive items instead of removing important sales history."
     },
     {
-      "tag": "reports",
-      "patterns": ["sales report", "product analytics", "view reports", "best seller"],
-      "keywords": ["sales", "report", "analytics", "revenue", "transactions", "best", "seller"],
-      "response": "Admins can open Sales Report for transactions and revenue, or Product Analytics for item performance, slow movers, low stock, and best sellers."
+      "tag": "category_management",
+      "patterns": ["add category", "edit category", "delete category", "manage categories", "category icon"],
+      "keywords": ["category", "categories", "icon", "sort", "group", "add", "edit"],
+      "response": "Admins can manage categories from Manage Food Items. Add or edit category names and icons, and only delete a category when it has no menu items assigned."
+    },
+    {
+      "tag": "recommendations",
+      "patterns": ["recommend item", "slow moving item", "suggest item", "what should I recommend", "upsell"],
+      "keywords": ["recommend", "suggest", "upsell", "slow", "moving", "sell", "promote"],
+      "response": "Use the recommendation button on Menu to see items with enough stock that may need promotion. Suggest those items to customers when they fit the order."
+    },
+    {
+      "tag": "sales_report",
+      "patterns": ["sales report", "view sales", "daily sales", "transactions", "sales filter", "export sales"],
+      "keywords": ["sales", "report", "daily", "transactions", "filter", "export", "revenue"],
+      "response": "Admins can open Sales Report to review revenue, order count, average order value, payment methods, and transactions. Use filters to narrow the date or search terms."
+    },
+    {
+      "tag": "product_analytics",
+      "patterns": ["product analytics", "best seller", "slow moving", "product performance", "item revenue"],
+      "keywords": ["analytics", "product", "best", "seller", "slow", "performance", "revenue"],
+      "response": "Admins can open Product Analytics to review best sellers, slow-moving items, revenue by product, low stock, and unavailable products."
+    },
+    {
+      "tag": "settings",
+      "patterns": ["store settings", "receipt settings", "tax rate", "business settings", "change settings"],
+      "keywords": ["settings", "store", "receipt", "tax", "business", "rate", "configure"],
+      "response": "Admins can open Settings to update store details, receipt information, tax rate, and user accounts. Review changes carefully because they affect future receipts and calculations."
     },
     {
       "tag": "users",
-      "patterns": ["add staff", "change password", "manage users", "account settings"],
-      "keywords": ["user", "staff", "password", "account", "settings", "admin", "cashier"],
-      "response": "Use Profile to update your own account. Admins can open Settings to add staff, deactivate users, and update store or receipt settings."
+      "patterns": ["add staff", "manage users", "add cashier", "deactivate user", "admin account", "cashier account"],
+      "keywords": ["user", "staff", "cashier", "admin", "account", "deactivate", "employee"],
+      "response": "Admins can manage staff from Settings. Add users with the correct role, update account details when needed, and deactivate accounts that should no longer access the POS."
     },
     {
-      "tag": "help",
-      "patterns": ["help", "what can you do", "guide me"],
-      "keywords": ["help", "guide", "assist", "how"],
-      "response": "I can guide staff through orders, payments, table service, tickets, stock, menu management, reports, and account settings. Ask a short question like 'how do I take an order?'"
+      "tag": "profile_password",
+      "patterns": ["change password", "update profile", "my account", "profile settings", "change my name"],
+      "keywords": ["profile", "password", "account", "name", "update", "login", "credentials"],
+      "response": "Open Profile to update your own account details or password. Use a password that staff can remember but customers cannot guess."
+    },
+    {
+      "tag": "login_issue",
+      "patterns": ["cannot login", "forgot password", "wrong password", "login failed", "employee id not working"],
+      "keywords": ["login", "password", "forgot", "failed", "employee", "username", "access"],
+      "response": "If login fails, check the employee ID or username and password first. If it still fails, ask an admin to verify the account in Settings or reset the credentials."
+    },
+    {
+      "tag": "roles_access",
+      "patterns": ["cashier access", "admin access", "why can't I see settings", "missing menu option", "role permission"],
+      "keywords": ["role", "access", "permission", "admin", "cashier", "settings", "missing"],
+      "response": "Some pages are admin-only, including item management, reports, analytics, and settings. Cashiers mainly use Menu, Table Services, Tickets, and Profile."
+    },
+    {
+      "tag": "chatbot_learning",
+      "patterns": ["teach chatbot", "teach the guide", "bot should learn", "save answer", "add chatbot answer"],
+      "keywords": ["teach", "learn", "training", "answer", "chatbot", "guide", "save"],
+      "response": "When I am unsure, use the teaching box to save the correct answer. The lesson is stored in learned_intents.json and will be checked before the built-in answers next time."
+    },
+    {
+      "tag": "python_unavailable",
+      "patterns": ["chatbot unavailable", "python unavailable", "staff guide not working", "bot not responding", "python not installed"],
+      "keywords": ["python", "unavailable", "not", "working", "responding", "installed", "chatbot"],
+      "response": "If the staff guide says Python is unavailable, install Python 3 on the server or set CHATBOT_PYTHON to the full Python executable path, then restart Apache."
+    },
+    {
+      "tag": "safe_operations",
+      "patterns": ["what should I check before completing", "avoid mistakes", "wrong payment", "wrong table", "double check order"],
+      "keywords": ["mistake", "wrong", "check", "verify", "before", "complete", "safe"],
+      "response": "Before completing an order, verify the cart items, quantities, order type, table, discount, payment method, amount received, and total. Fix mistakes before printing the receipt."
     }
   ]
 }
