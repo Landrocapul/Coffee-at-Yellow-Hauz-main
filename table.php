@@ -36,10 +36,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     } elseif ($action === 'add_table') {
         $tableNumber = (int)$_POST['table_number'];
         $capacity = max(1, min(12, (int)$_POST['capacity']));
+        $area = sanitize($_POST['area'] ?? 'normal');
+        if (!in_array($area, ['normal', 'airconditioned'], true)) {
+            $area = 'normal';
+        }
 
         try {
-            $stmt = $pdo->prepare("INSERT INTO tables (table_number, capacity, status) VALUES (?, ?, 'available')");
-            $stmt->execute([$tableNumber, $capacity]);
+            $stmt = $pdo->prepare("INSERT INTO tables (table_number, capacity, area, status) VALUES (?, ?, ?, 'available')");
+            $stmt->execute([$tableNumber, $capacity, $area]);
             redirect('table.php');
         } catch (PDOException $e) {
             $error = 'Failed to add table: ' . $e->getMessage();
@@ -83,6 +87,11 @@ $allowedTableFilters = ['all', 'available', 'occupied', 'reserved', 'cleaning'];
 if (!in_array($tableStatusFilter, $allowedTableFilters, true)) {
     $tableStatusFilter = 'all';
 }
+$tableAreaFilter = $_GET['area'] ?? 'all';
+$allowedAreaFilters = ['all', 'normal', 'airconditioned'];
+if (!in_array($tableAreaFilter, $allowedAreaFilters, true)) {
+    $tableAreaFilter = 'all';
+}
 
 $tableStats = [
     'all' => count($allTables),
@@ -108,6 +117,14 @@ $tables = array_values(array_filter($allTables, function ($table) use ($tableSta
         return $table['status'] === 'occupied' || !empty($table['current_order_id']);
     }
     return $table['status'] === $tableStatusFilter && empty($table['current_order_id']);
+}));
+$tables = array_values(array_filter($tables, function ($table) use ($tableAreaFilter) {
+    if ($tableAreaFilter === 'all') {
+        return true;
+    }
+    $tableArea = $table['area'] ?? (((int)$table['table_number'] >= 5) ? 'airconditioned' : 'normal');
+    $isAirconditioned = $tableArea === 'airconditioned';
+    return $tableAreaFilter === 'airconditioned' ? $isAirconditioned : !$isAirconditioned;
 }));
 $nextTableNumber = empty($allTables) ? 1 : ((int)max(array_column($allTables, 'table_number')) + 1);
 
@@ -239,25 +256,46 @@ foreach ($tables as $index => $table) {
                     <i class="fa-solid fa-bars"></i>
                 </button>
                 
-                <!-- Status Filters -->
-                <div class="flex items-center bg-white border border-gray-200 p-1.5 rounded-full shadow-sm mx-6">
-                    <?php
-                    $filterLabels = [
-                        'all' => 'All',
-                        'available' => 'Available',
-                        'occupied' => 'Occupied',
-                        'reserved' => 'Reserved',
-                        'cleaning' => 'Cleaning',
-                    ];
-                    foreach ($filterLabels as $filterKey => $filterLabel):
-                        $filterClass = $tableStatusFilter === $filterKey
-                            ? 'bg-brand-black text-brand font-bold shadow-sm'
-                            : 'text-gray-500 hover:text-brand-black font-semibold';
-                    ?>
-                    <a href="table.php?status=<?php echo $filterKey; ?>" class="<?php echo $filterClass; ?> px-4 xl:px-5 py-2 rounded-full text-sm transition-all">
-                        <?php echo $filterLabel; ?>
-                    </a>
-                    <?php endforeach; ?>
+                <div class="flex-1 mx-6 min-w-0 flex items-center gap-3 overflow-x-auto hide-scrollbar">
+                    <h2 class="text-2xl font-serif font-bold text-brand-black tracking-wide uppercase leading-tight shrink-0">TABLES</h2>
+                    <div class="flex items-center gap-3">
+                        <!-- Status Filters -->
+                        <div class="flex items-center bg-white border border-gray-200 p-1 rounded-full shadow-sm">
+                            <?php
+                            $filterLabels = [
+                                'all' => 'All',
+                                'available' => 'Available',
+                                'occupied' => 'Occupied',
+                                'reserved' => 'Reserved',
+                                'cleaning' => 'Cleaning',
+                            ];
+                            foreach ($filterLabels as $filterKey => $filterLabel):
+                                $filterClass = $tableStatusFilter === $filterKey
+                                    ? 'bg-brand-black text-brand font-bold shadow-sm'
+                                    : 'text-gray-500 hover:text-brand-black font-semibold';
+                            ?>
+                            <a href="table.php?status=<?php echo $filterKey; ?>&area=<?php echo urlencode($tableAreaFilter); ?>" class="<?php echo $filterClass; ?> px-3 py-1.5 rounded-full text-xs transition-all">
+                                <?php echo $filterLabel; ?>
+                            </a>
+                            <?php endforeach; ?>
+                        </div>
+                        <div class="hidden md:flex items-center bg-white border border-gray-200 p-1 rounded-full shadow-sm">
+                            <?php
+                            $areaLabels = [
+                                'all' => 'All Areas',
+                                'normal' => 'Normal',
+                                'airconditioned' => 'Airconditioned',
+                            ];
+                            foreach ($areaLabels as $areaKey => $areaLabel):
+                                $areaClass = $tableAreaFilter === $areaKey
+                                    ? 'bg-brand-black text-brand font-bold shadow-sm'
+                                    : 'text-gray-500 hover:text-brand-black font-semibold';
+                            ?>
+                            <a href="table.php?status=<?php echo urlencode($tableStatusFilter); ?>&area=<?php echo $areaKey; ?>" class="<?php echo $areaClass; ?> px-3 py-1.5 rounded-full text-xs transition-all">
+                                <?php echo $areaLabel; ?>
+                            </a>
+                            <?php endforeach; ?>
+                        </div>
                 </div>
                 
                 <button onclick="showAddTableModal()" class="w-10 h-10 bg-brand-black text-brand rounded-xl shadow-sm border border-brand flex items-center justify-center hover:bg-gray-800 transition-colors" title="Add table">
@@ -267,15 +305,6 @@ foreach ($tables as $index => $table) {
 
             <!-- Scrollable Table Layout -->
             <div class="flex-1 overflow-y-auto px-6 lg:px-10 pb-10 pt-8 hide-scrollbar relative">
-                <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-8">
-                    <?php foreach ($filterLabels as $filterKey => $filterLabel): ?>
-                    <a href="table.php?status=<?php echo $filterKey; ?>" class="bg-white border <?php echo $tableStatusFilter === $filterKey ? 'border-brand shadow-sm' : 'border-gray-200'; ?> rounded-xl px-4 py-3 hover:border-brand transition-colors">
-                        <p class="text-[10px] text-gray-500 font-bold uppercase tracking-wider"><?php echo $filterLabel; ?></p>
-                        <p class="text-2xl font-serif font-bold text-brand-black mt-1"><?php echo (int)$tableStats[$filterKey]; ?></p>
-                    </a>
-                    <?php endforeach; ?>
-                </div>
-
                 <!-- Floor Plan Grid -->
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-x-8 xl:gap-x-10 gap-y-10 w-full max-w-7xl mx-auto">
                     <?php foreach ($floorColumns as $column): ?>
@@ -291,6 +320,8 @@ foreach ($tables as $index => $table) {
                             $secondSideChairs = (int)floor($chairCount / 2);
                             $tableHeight = $isLargeTable ? 'h-[240px] xl:h-[300px]' : 'h-[140px] xl:h-[170px]';
                             $statusLabel = str_replace('_', ' ', $table['status']);
+                            $tableArea = $table['area'] ?? (((int)$table['table_number'] >= 5) ? 'airconditioned' : 'normal');
+                            $areaLabel = $tableArea === 'airconditioned' ? 'Airconditioned' : 'Normal';
                             $displayName = $table['customer_name'] ?: ($isReserved ? 'Reserved Guest' : '');
                             $displayTime = !empty($table['order_created_at']) ? date('h:i A', strtotime($table['order_created_at'])) : '';
                             $boxClasses = 'relative z-10 w-full h-full rounded-[24px] p-4 flex flex-col justify-between transition-all cursor-pointer ';
@@ -345,7 +376,10 @@ foreach ($tables as $index => $table) {
                                 </div>
                                 <?php endif; ?>
 
-                                <div class="absolute bottom-4 right-4">
+                                <div class="absolute bottom-4 right-4 flex items-center gap-1.5">
+                                    <span class="bg-white/80 text-gray-600 border border-gray-200 text-[9px] px-2 py-1 rounded uppercase tracking-wider font-bold">
+                                        <?php echo htmlspecialchars($areaLabel); ?>
+                                    </span>
                                     <span class="<?php echo $isActive ? 'bg-white/10 text-brand border border-white/20' : ($isReserved ? 'bg-brand-black text-brand' : 'bg-gray-100 text-gray-500 border border-gray-200'); ?> text-[9px] px-2 py-1 rounded uppercase tracking-wider font-bold">
                                         <?php echo htmlspecialchars($statusLabel); ?>
                                     </span>
@@ -387,6 +421,13 @@ foreach ($tables as $index => $table) {
                             <?php echo $chairs; ?> <?php echo $chairs === 1 ? 'Chair' : 'Chairs'; ?>
                         </option>
                         <?php endfor; ?>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Area</label>
+                    <select name="area" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                        <option value="normal">Normal</option>
+                        <option value="airconditioned">Airconditioned</option>
                     </select>
                 </div>
                 

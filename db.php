@@ -84,6 +84,125 @@ function updateSetting($key, $value) {
     return $stmt->execute([$key, $value, $value]);
 }
 
+function getDefaultTimeMenus() {
+    return [
+        [
+            'title' => 'Morning Menu',
+            'time' => 'Opening - 11:00 AM',
+            'focus' => 'Heavy breakfast sales, premium coffee pairings, and quick pastries.',
+            'start' => '00:00',
+            'end' => '11:00',
+            'item_names' => [
+                'Chicken Tocino',
+                'Hungarian Sausage',
+                'Longganisa',
+                'Homemade Corned Beef',
+                'Fried Bangus',
+                'Waffles',
+                'Nutella Waffles',
+                'Spanish Latte',
+                'Latte',
+                'Americano Hot',
+                'Matcha Latte',
+                'YH Dark Chocolate',
+            ],
+            'items' => [
+                'Featured Breakfasts: Chicken Tocino, Hungarian Sausage, Longganisa, Homemade Corned Beef, and Fried Bangus with eggs and rice.',
+                'Sweet Starts: Waffles, Nutella Waffles, and Cakes/Pastries.',
+                'Primary Drinks: Hot Coffee and Hot Drinks.',
+            ],
+        ],
+        [
+            'title' => 'Lunch & Afternoon Menu',
+            'time' => '11:00 AM - 5:00 PM',
+            'focus' => 'Savory meals, light bites for remote workers, and refreshing cold drinks.',
+            'start' => '11:00',
+            'end' => '17:00',
+            'item_names' => [
+                'Rosemary Porkchop',
+                'Chicken Pesto',
+                'Lamb Adobo Flakes',
+                'Pork Adobo Flakes',
+                'Papa Carlos Butifarra',
+                'Marinated Tofu',
+                'Mango Kani Salad',
+                'Tuna Salad',
+                'Spaghetti Bolognese',
+                'Tuna & Garlic Pasta',
+                'Club Sandwich',
+                'Tuna Melt Sandwich',
+                'Iced Latte',
+                'Iced Kadayawan',
+                'Calamansi',
+                'Cucumber Lemonade',
+            ],
+            'items' => [
+                'Mid-day Meals: Rosemary Porkchop, Chicken Pesto, Lamb Adobo Flakes, Pork Adobo Flakes, Papa Carlos Butifarra, and Marinated Tofu.',
+                'Lighter Lunch: Salads, Pastas, and Sandwiches.',
+                'Beat-the-Heat Drinks: On The Rocks, Blended Coffee, Refreshers, Milkshakes, and Milk Tea.',
+            ],
+        ],
+        [
+            'title' => 'Sundown & Dinner Menu',
+            'time' => '5:00 PM - Closing',
+            'focus' => 'Shared plates, comfort food, groups, and casual evening drinking.',
+            'start' => '17:00',
+            'end' => '23:59',
+            'item_names' => [
+                'Yellow Hauz Special Pizza',
+                'Chili Chorizo Pizza',
+                'Spicy Sardines Pizza',
+                'Three Cheese Pizza',
+                'Chicken Waffles',
+                'Pica Platter',
+                'Hungarian Sausage w/ fries',
+                'Kamote Fries',
+                'Potato Wedges',
+                'Rosemary Porkchop',
+                'Papa Carlos Butifarra',
+                'Fried Bangus',
+                'Affogato',
+                'San Miguel Pilsen',
+                'Iced YH Mocha',
+            ],
+            'items' => [
+                'Group Sharing: Pizzas, Chicken Waffles, Pica Platter, Hungarian w/ fries, Kamote Fries, and Potato Wedges.',
+                'Dinner Entrees: Rosemary Porkchop, Papa Carlos Butifarra, and Fried Bangus.',
+                'Night Cap Drinks: Affogato, San Miguel Pilsen, and premium iced coffee options.',
+            ],
+        ],
+    ];
+}
+
+function getTimeMenus() {
+    $stored = getSetting('time_based_menus');
+    if (!$stored) {
+        return getDefaultTimeMenus();
+    }
+
+    $decoded = json_decode($stored, true);
+    if (!is_array($decoded)) {
+        return getDefaultTimeMenus();
+    }
+
+    $defaultsByTitle = [];
+    foreach (getDefaultTimeMenus() as $defaultMenu) {
+        $defaultsByTitle[$defaultMenu['title']] = $defaultMenu;
+    }
+
+    foreach ($decoded as &$menu) {
+        $defaultMenu = $defaultsByTitle[$menu['title'] ?? ''] ?? null;
+        if ($defaultMenu) {
+            $menu['start'] = $menu['start'] ?? $defaultMenu['start'];
+            $menu['end'] = $menu['end'] ?? $defaultMenu['end'];
+            $menu['item_names'] = $menu['item_names'] ?? $defaultMenu['item_names'];
+        }
+    }
+    unset($menu);
+
+    return $decoded;
+}
+
 // Helper function to check if user is cashier
 function isCashier() {
     $currentUser = getCurrentUser();

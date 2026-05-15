@@ -8,6 +8,32 @@ if (!isLoggedIn()) {
 
 // Get current user info
 $currentUser = getCurrentUser();
+$timeMenus = getTimeMenus();
+
+function timeToMinutes($time) {
+    [$hours, $minutes] = array_pad(explode(':', $time), 2, 0);
+    return ((int)$hours * 60) + (int)$minutes;
+}
+
+function isCurrentTimeMenu($timeMenu) {
+    $now = ((int)date('H') * 60) + (int)date('i');
+    $start = timeToMinutes($timeMenu['start'] ?? '00:00');
+    $end = timeToMinutes($timeMenu['end'] ?? '23:59');
+
+    if ($start <= $end) {
+        return $now >= $start && $now <= $end;
+    }
+
+    return $now >= $start || $now <= $end;
+}
+
+$activeTimeMenu = $timeMenus[0] ?? null;
+foreach ($timeMenus as $timeMenu) {
+    if (isCurrentTimeMenu($timeMenu)) {
+        $activeTimeMenu = $timeMenu;
+        break;
+    }
+}
 
 // Get categories
 $stmt = $pdo->query("SELECT * FROM categories WHERE status = 'active' ORDER BY sort_order ASC");
@@ -15,7 +41,7 @@ $categories = $stmt->fetchAll();
 
 function categoryMenuType($categoryName) {
     $name = strtolower($categoryName);
-    $foodKeywords = ['food', 'rice', 'breakfast', 'pasta', 'starter', 'salad', 'pizza', 'sandwich', 'sandwiches', 'dessert', 'desserts', 'pastry', 'pastries', 'cake', 'cookie', 'bread', 'meal', 'snack'];
+    $foodKeywords = ['food', 'add-on food', 'addon food', 'appetizer', 'rice', 'breakfast', 'pasta', 'starter', 'salad', 'pizza', 'sandwich', 'sandwiches', 'dessert', 'desserts', 'pastry', 'pastries', 'cake', 'cookie', 'bread', 'meal', 'snack'];
 
     foreach ($foodKeywords as $keyword) {
         if (strpos($name, $keyword) !== false) {
@@ -92,6 +118,9 @@ if ($searchTerm !== '') {
     $stmt->execute([$selectedCategoryId]);
     $menuItems = $stmt->fetchAll();
 }
+$menuItemCount = count($menuItems);
+$useXLargeItemCards = $menuItemCount < 7;
+$useLargeItemCards = $menuItemCount < 10;
 
 // Get category item counts
 $categoryCounts = [];
@@ -129,23 +158,65 @@ $stmt->execute([$lowStockThreshold]);
 $lowStockItems = $stmt->fetchAll();
 $lowStockCount = count($lowStockItems);
 
-// Recommend slow-moving items with enough stock so cashiers can suggest them.
-$stmt = $pdo->query("SELECT mi.id, mi.name, mi.description, mi.price, mi.image_url, mi.temperature, mi.quantity, c.name as category_name,
-                    COALESCE(SUM(CASE
-                        WHEN o.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-                        AND o.status IN ('processing', 'completed')
-                        THEN oi.quantity
-                        ELSE 0
-                    END), 0) as sold_30_days
-                    FROM menu_items mi
-                    JOIN categories c ON mi.category_id = c.id
-                    LEFT JOIN order_items oi ON oi.menu_item_id = mi.id
-                    LEFT JOIN orders o ON o.id = oi.order_id
-                    WHERE mi.is_available = 1 AND mi.quantity > {$lowStockThreshold}
-                    GROUP BY mi.id, mi.name, mi.description, mi.price, mi.image_url, mi.temperature, mi.quantity, c.name
-                    ORDER BY sold_30_days ASC, mi.quantity DESC, mi.name ASC
+// Recommend high-value items using weighted recent sales + stock sanity.
+$stmt = $pdo->query("SELECT rec.id, rec.name, rec.description, rec.price, rec.image_url, rec.temperature, rec.quantity,
+                    rec.category_name, rec.sold_30_days
+                    FROM (
+                        SELECT mi.id, mi.name, mi.description, mi.price, mi.image_url, mi.temperature, mi.quantity,
+                               c.name AS category_name,
+                               COALESCE(SUM(CASE
+                                   WHEN o.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+                                   AND o.status IN ('processing', 'completed')
+                                   THEN oi.quantity ELSE 0 END), 0) AS sold_30_days,
+                               COALESCE(SUM(CASE
+                                   WHEN o.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                                   AND o.status IN ('processing', 'completed')
+                                   THEN oi.quantity ELSE 0 END), 0) AS sold_7_days,
+                               (
+                                   (COALESCE(SUM(CASE
+                                       WHEN o.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+                                       AND o.status IN ('processing', 'completed')
+                                       THEN oi.quantity ELSE 0 END), 0) * 0.55) +
+                                   (COALESCE(SUM(CASE
+                                       WHEN o.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                                       AND o.status IN ('processing', 'completed')
+                                       THEN oi.quantity ELSE 0 END), 0) * 0.35) +
+                                   (LEAST(mi.quantity, 20) * 0.10)
+                               ) AS recommendation_score
+                        FROM menu_items mi
+                        JOIN categories c ON mi.category_id = c.id
+                        LEFT JOIN order_items oi ON oi.menu_item_id = mi.id
+                        LEFT JOIN orders o ON o.id = oi.order_id
+                        WHERE mi.is_available = 1
+                          AND mi.quantity > {$lowStockThreshold}
+                          AND c.name <> 'Drink Add-ons'
+                          AND mi.name <> 'Bottled Water'
+                        GROUP BY mi.id, mi.name, mi.description, mi.price, mi.image_url, mi.temperature, mi.quantity, c.name
+                    ) rec
+                    ORDER BY rec.recommendation_score DESC, rec.sold_7_days DESC, rec.name ASC
                     LIMIT 3");
 $recommendedItems = $stmt->fetchAll();
+
+$timeMenuItems = [];
+$timeMenuItemNames = array_values(array_filter($activeTimeMenu['item_names'] ?? []));
+if (!empty($timeMenuItemNames)) {
+    $placeholders = implode(',', array_fill(0, count($timeMenuItemNames), '?'));
+    $stmt = $pdo->prepare("SELECT mi.*, c.name as category_name, c.icon as category_icon
+                          FROM menu_items mi
+                          JOIN categories c ON mi.category_id = c.id
+                          WHERE mi.is_available = 1 AND mi.name IN ($placeholders)");
+    $stmt->execute($timeMenuItemNames);
+    $timeMenuRows = $stmt->fetchAll();
+    $itemsByName = [];
+    foreach ($timeMenuRows as $row) {
+        $itemsByName[$row['name']] = $row;
+    }
+    foreach ($timeMenuItemNames as $name) {
+        if (isset($itemsByName[$name])) {
+            $timeMenuItems[] = $itemsByName[$name];
+        }
+    }
+}
 
 // Initialize cart if not exists
 if (!isset($_SESSION['cart'])) {
@@ -374,11 +445,11 @@ $totalAmount = $subtotal + $taxAmount;
 
         <main class="flex-1 flex flex-col relative bg-vintage-paper">
             <!-- Top Header -->
-            <header class="h-[88px] flex items-center justify-between px-8 shrink-0 border-b border-gray-200/50">
+            <header class="h-[76px] flex items-center justify-between px-5 shrink-0">
                 <button id="sidebarToggle" class="w-10 h-10 bg-white rounded-xl shadow-sm border border-gray-200 flex items-center justify-center text-gray-500 hover:text-brand-black">
                     <i class="fa-solid fa-bars"></i>
                 </button>
-                
+
                 <form method="GET" action="menu.php" class="flex-1 max-w-2xl mx-6 relative">
                     <input type="hidden" name="type" value="<?php echo htmlspecialchars($menuType); ?>">
                     <i class="fa-solid fa-search absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"></i>
@@ -416,10 +487,10 @@ $totalAmount = $subtotal + $taxAmount;
                 </button>
             </header>
 
-            <div class="flex-1 overflow-y-auto px-8 pb-32 pt-6 flex gap-6">
+            <div class="flex-1 overflow-y-auto px-5 pb-32 pt-3 flex flex-row-reverse gap-2">
                 <!-- Categories Sidebar -->
-                <div class="flex flex-col gap-3 shrink-0">
-                    <div class="bg-white border border-gray-200 rounded-2xl p-1.5 shadow-sm flex flex-col gap-1">
+                <div class="grid grid-cols-1 content-start gap-1.5 shrink-0 w-[152px]">
+                    <div class="bg-white border border-gray-200 rounded-2xl p-1.5 shadow-sm grid grid-cols-2 gap-1">
                         <button type="button" onclick="selectMenuType('drinks')" class="w-full h-11 rounded-xl flex items-center justify-center gap-2 text-xs font-bold <?php echo $menuType === 'drinks' ? 'bg-brand text-brand-black' : 'text-gray-500 hover:bg-gray-50 hover:text-brand-black'; ?> transition-colors">
                             <i class="fa-solid fa-mug-saucer"></i>
                             Drinks
@@ -430,16 +501,15 @@ $totalAmount = $subtotal + $taxAmount;
                         </button>
                     </div>
                     <?php foreach ($visibleCategories as $category): ?>
-                    <div class="w-[100px] h-[100px] <?php echo $category['id'] == $selectedCategoryId ? 'bg-brand text-brand-black' : 'bg-white'; ?> rounded-2xl flex flex-col items-center justify-center cursor-pointer shadow-sm border <?php echo $category['id'] == $selectedCategoryId ? 'border-brand/30' : 'border-gray-200 hover:border-brand'; ?> transition-all" onclick="selectCategory(<?php echo $category['id']; ?>)">
-                        <div class="w-10 h-10 mb-1 flex items-center justify-center text-xl"><i class="<?php echo htmlspecialchars($category['icon']); ?>"></i></div>
-                        <span class="font-bold text-xs text-center leading-tight"><?php echo htmlspecialchars($category['name']); ?></span>
-                        <span class="text-[10px] <?php echo $category['id'] == $selectedCategoryId ? 'text-brand-black/70' : 'text-gray-400'; ?> mt-0.5"><?php echo $categoryCounts[$category['id']] ?? 0; ?></span>
+                    <div class="w-full h-[44px] <?php echo $category['id'] == $selectedCategoryId ? 'bg-brand text-brand-black' : 'bg-white'; ?> rounded-xl flex items-center justify-start gap-1 px-1.5 cursor-pointer shadow-sm border <?php echo $category['id'] == $selectedCategoryId ? 'border-brand/30' : 'border-gray-200 hover:border-brand'; ?> transition-all" onclick="selectCategory(<?php echo $category['id']; ?>)">
+                        <div class="w-7 h-7 flex items-center justify-center text-sm"><i class="<?php echo htmlspecialchars($category['icon']); ?>"></i></div>
+                        <span class="font-bold text-[11px] leading-tight"><?php echo htmlspecialchars($category['name']); ?></span>
                     </div>
                     <?php endforeach; ?>
                 </div>
 
                 <!-- Product Grid -->
-                <div class="flex-1 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                <div class="flex-1 grid grid-cols-1 md:grid-cols-2 <?php echo $useXLargeItemCards ? 'lg:grid-cols-2 xl:grid-cols-2' : 'lg:grid-cols-3 xl:grid-cols-3'; ?> <?php echo $useXLargeItemCards ? 'gap-4' : ($useLargeItemCards ? 'gap-3' : 'gap-2'); ?> items-start">
                     <?php if (empty($menuItems)): ?>
                     <div class="col-span-full flex flex-col items-center justify-center text-center py-16 text-gray-400">
                         <i class="fa-solid fa-magnifying-glass text-4xl mb-3"></i>
@@ -452,33 +522,73 @@ $totalAmount = $subtotal + $taxAmount;
 
                     <?php foreach ($menuItems as $item): ?>
                     <?php $isOutOfStock = (int)($item['quantity'] ?? 0) <= 0; ?>
-                    <div class="bg-white p-3 rounded-2xl shadow-sm border <?php echo $isOutOfStock ? 'border-red-100 opacity-60 cursor-not-allowed' : 'border-gray-200 hover:shadow-md cursor-pointer hover:border-brand'; ?> flex flex-col transition-all group" <?php if (!$isOutOfStock): ?>onclick="addToCart(<?php echo $item['id']; ?>)"<?php endif; ?>>
-                        <div class="relative w-full h-[160px] rounded-xl overflow-hidden mb-3 bg-gray-100 border border-gray-100">
+                    <div class="bg-white <?php echo $useXLargeItemCards ? 'p-3 gap-2.5' : ($useLargeItemCards ? 'p-2.5 gap-2' : 'p-1.5 gap-1'); ?> rounded-xl shadow-sm border <?php echo $isOutOfStock ? 'border-red-100 opacity-60 cursor-not-allowed' : 'border-gray-200 hover:shadow-md cursor-pointer hover:border-brand'; ?> flex items-stretch self-start transition-all group" <?php if (!$isOutOfStock): ?>onclick="addToCart(<?php echo $item['id']; ?>)"<?php endif; ?>>
+                        <div class="relative <?php echo $useXLargeItemCards ? 'w-[108px] h-[108px]' : ($useLargeItemCards ? 'w-[92px] h-[92px]' : 'w-[70px] h-[70px]'); ?> shrink-0 rounded-lg overflow-hidden bg-gray-100 border border-gray-100">
                             <?php if ($item['is_best_seller']): ?>
-                            <span class="absolute top-2 left-2 bg-brand text-brand-black text-[10px] font-bold px-2 py-1 rounded-md z-10 uppercase tracking-wide border border-brand-black">Best Seller</span>
+                            <span class="absolute top-1 left-1 bg-brand text-brand-black text-[8px] font-bold px-1.5 py-0.5 rounded z-10 uppercase tracking-wide border border-brand-black">Best</span>
                             <?php endif; ?>
                             <?php if ($isOutOfStock): ?>
                             <span class="absolute top-2 right-2 bg-red-600 text-white text-[10px] font-bold px-2 py-1 rounded-md z-10 uppercase tracking-wide">Out of Stock</span>
                             <?php endif; ?>
                             <img src="<?php echo htmlspecialchars($item['image_url']); ?>" alt="<?php echo htmlspecialchars($item['name']); ?>" class="w-full h-full object-cover <?php echo $isOutOfStock ? 'grayscale' : 'group-hover:scale-105'; ?> transition-transform duration-500">
                         </div>
-                        <h3 class="font-bold text-sm leading-tight mb-1 font-serif text-lg"><?php echo htmlspecialchars($item['name']); ?></h3>
-                        <div class="flex justify-between items-end mt-auto pt-2">
-                            <div class="flex flex-col">
-                                <span class="font-bold text-brand-black"><?php echo formatCurrency($item['price']); ?></span>
-                                <span class="text-xs <?php echo $isOutOfStock ? 'text-red-600 font-bold' : 'text-gray-500'; ?>">Qty: <?php echo $item['quantity'] ?? 0; ?></span>
-                            </div>
-                            <div class="flex items-center gap-1 text-[10px] text-gray-600 font-bold tracking-wider uppercase border border-gray-200 px-2 py-0.5 rounded bg-gray-50">
-                                <?php echo strtoupper($item['temperature']); ?>
+                        <div class="min-w-0 flex-1 flex flex-col justify-between py-0">
+                            <h3 class="font-bold leading-tight font-serif <?php echo $useXLargeItemCards ? 'text-lg' : ($useLargeItemCards ? 'text-base' : 'text-sm'); ?> break-words"><?php echo htmlspecialchars($item['name']); ?></h3>
+                            <div class="flex items-start mt-0.5">
+                                <div class="flex flex-col leading-tight">
+                                    <span class="font-bold <?php echo $useXLargeItemCards ? 'text-lg' : ($useLargeItemCards ? 'text-base' : 'text-sm'); ?> text-brand-black"><?php echo formatCurrency($item['price']); ?></span>
+                                    <div class="flex items-center gap-1">
+                                        <span class="text-xs <?php echo $isOutOfStock ? 'text-red-600 font-bold' : 'text-gray-500'; ?>">Qty: <?php echo $item['quantity'] ?? 0; ?></span>
+                                        <span class="text-[9px] text-gray-700 font-bold tracking-wider uppercase border border-gray-200 px-1 py-0.5 rounded bg-gray-50"><?php echo strtoupper($item['temperature']); ?></span>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
                     <?php endforeach; ?>
                 </div>
+
+                <!-- Time-Based Featured Items -->
+                <aside id="timeMenuPanel" class="hidden xl:block w-[170px] shrink-0 transition-all duration-300 ease-in-out">
+                    <div class="sticky top-0 bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
+                        <button type="button" id="timeMenuToggle" class="w-full px-3 py-3 border-b border-gray-100 bg-brand-light flex items-center justify-between gap-2 text-left hover:bg-brand/70 transition-colors" aria-label="Toggle time-based menu">
+                            <div id="timeMenuHeaderText" class="min-w-0">
+                                <p class="text-[10px] font-bold uppercase tracking-wider text-brand-dark"><?php echo htmlspecialchars($activeTimeMenu['time'] ?? 'Now'); ?></p>
+                                <h3 class="font-serif text-lg font-bold text-brand-black leading-tight truncate"><?php echo htmlspecialchars($activeTimeMenu['title'] ?? 'Featured Now'); ?></h3>
+                            </div>
+                            <span id="timeMenuCollapsedIcon" class="hidden w-6 h-6 rounded-md border border-gray-200 bg-white text-gray-600 items-center justify-center shrink-0">
+                                <i class="fa-solid fa-chevron-left text-[10px]"></i>
+                            </span>
+                        </button>
+                        <div id="timeMenuContent" class="max-h-[calc(100vh-220px)] overflow-y-auto p-2.5 space-y-2.5">
+                            <?php if (empty($timeMenuItems)): ?>
+                            <div class="rounded-xl border border-gray-200 bg-gray-50 p-4 text-center text-gray-400">
+                                <i class="fa-solid fa-clock text-2xl mb-2"></i>
+                                <p class="text-xs font-bold text-gray-500">No featured items found</p>
+                            </div>
+                            <?php endif; ?>
+                            <?php foreach ($timeMenuItems as $timeItem): ?>
+                            <?php $isTimeItemOutOfStock = (int)($timeItem['quantity'] ?? 0) <= 0; ?>
+                            <button type="button" class="w-full text-left rounded-xl border <?php echo $isTimeItemOutOfStock ? 'border-red-100 bg-red-50 opacity-60 cursor-not-allowed' : 'border-gray-200 bg-gray-50 hover:border-brand hover:bg-brand-light'; ?> px-2.5 py-2 transition-colors" <?php if (!$isTimeItemOutOfStock): ?>onclick="addToCart(<?php echo (int)$timeItem['id']; ?>)"<?php endif; ?>>
+                                <div class="min-w-0">
+                                    <h4 class="font-serif font-bold text-xs leading-tight text-brand-black truncate"><?php echo htmlspecialchars($timeItem['name']); ?></h4>
+                                    <p class="text-[10px] text-gray-500 mt-0.5 truncate"><?php echo htmlspecialchars($timeItem['category_name']); ?></p>
+                                    <div class="flex items-center justify-between gap-2 mt-1.5">
+                                        <span class="font-bold text-[11px] text-brand-black"><?php echo formatCurrency($timeItem['price']); ?></span>
+                                        <span class="text-[10px] <?php echo $isTimeItemOutOfStock ? 'text-red-600 font-bold' : 'text-gray-500'; ?>">
+                                            <?php echo $isTimeItemOutOfStock ? 'Out' : 'Qty ' . (int)$timeItem['quantity']; ?>
+                                        </span>
+                                    </div>
+                                </div>
+                            </button>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                </aside>
             </div>
 
             <!-- Bottom Active Tickets Bar -->
-            <div class="absolute bottom-6 left-8 right-8 flex gap-4">
+            <div class="absolute bottom-6 left-5 right-5 flex gap-3">
                 <?php foreach ($activeOrders as $order): ?>
                 <div class="<?php echo $order['status'] == 'processing' ? 'bg-brand-black text-white border-2 border-brand' : 'bg-white'; ?> rounded-full pl-2 <?php echo $order['status'] == 'processing' ? 'pr-4' : 'pr-6'; ?> py-2 flex items-center gap-3 shadow-lg border border-gray-200 cursor-pointer">
                     <div class="w-10 h-10 rounded-full <?php echo $order['status'] == 'processing' ? 'bg-brand text-brand-black' : 'bg-brand text-brand-black border border-brand-black'; ?> font-bold flex items-center justify-center">T<?php echo $order['table_number'] ?? 'TA'; ?></div>
@@ -500,16 +610,22 @@ $totalAmount = $subtotal + $taxAmount;
         <aside class="w-[360px] bg-white border-l border-vintage-border flex flex-col shrink-0 z-10 shadow-[-10px_0_20px_rgba(0,0,0,0.02)]">
             
             <!-- Panel Header -->
-            <div class="p-4 pb-3 border-b border-gray-100">
-                <div class="flex justify-between items-start mb-3">
-                    <div>
-                        <button onclick="showTableSelectModal()" class="group flex items-center gap-2 text-left">
-                            <h2 id="selectedTableLabel" class="text-xl font-serif font-bold group-hover:text-brand-dark transition-colors">Select Table</h2>
-                            <i class="fa-solid fa-pen text-xs text-gray-400 group-hover:text-brand-dark transition-colors"></i>
+            <div class="p-4 pb-1">
+                <div class="flex items-start justify-between gap-3 mb-3">
+                    <div class="min-w-0 flex-1">
+                        <button onclick="showTableSelectModal()" class="group inline-flex max-w-full items-center gap-1.5 text-left">
+                            <h2 id="selectedTableLabel" class="min-w-0 truncate text-xl font-serif font-bold group-hover:text-brand-dark transition-colors">Select Table</h2>
+                            <i class="fa-solid fa-pen text-xs text-gray-400 group-hover:text-brand-dark transition-colors shrink-0"></i>
                         </button>
                         <p class="text-xs text-gray-500 font-medium mt-1"><?php echo htmlspecialchars($currentUser['full_name']); ?></p>
                     </div>
-                    <div class="flex items-center gap-2">
+                    <div class="flex flex-col items-end gap-1.5 shrink-0">
+                        <?php if (!empty($_SESSION['cart'])): ?>
+                        <button onclick="showClearCartModal()" class="bg-red-50 text-red-600 border border-red-200 px-2.5 py-1.5 rounded-lg font-bold text-xs hover:bg-red-600 hover:text-white transition-colors flex items-center justify-center gap-1.5">
+                            <i class="fa-solid fa-trash-can"></i>
+                            Clear All
+                        </button>
+                        <?php endif; ?>
                         <!-- Order Type Switch -->
                         <div class="bg-gray-100 p-1 rounded-lg flex items-center text-sm font-semibold border border-gray-200">
                             <button id="dineInBtn" onclick="setOrderType('dinein')" class="px-3 py-1.5 rounded-md bg-white text-brand-black font-bold shadow-sm border border-gray-300 transition-all">
@@ -525,7 +641,7 @@ $totalAmount = $subtotal + $taxAmount;
                 </div>
             </div>
 
-            <div class="flex-1 overflow-y-auto p-4 space-y-3">
+            <div class="flex-1 overflow-y-auto px-4 pb-4 pt-0 space-y-2">
                 <?php if (isset($_SESSION['error'])): ?>
                 <div class="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl mb-4">
                     <div class="flex items-center gap-3">
@@ -542,9 +658,8 @@ $totalAmount = $subtotal + $taxAmount;
                 </div>
                 <?php else: ?>
                 <?php foreach ($_SESSION['cart'] as $item): ?>
-                <div class="flex gap-2 border border-gray-200 p-2 rounded-xl shadow-sm bg-white">
-                    <img src="<?php echo htmlspecialchars($item['image_url']); ?>" class="w-12 h-12 rounded-lg object-cover shrink-0 border border-gray-100">
-                    <div class="flex-1 flex flex-col justify-between">
+                <div class="flex gap-1.5 border border-gray-200 px-2.5 py-1.5 rounded-xl shadow-sm bg-white">
+                    <div class="flex-1 min-w-0 flex flex-col justify-between">
                         <h4 class="text-sm font-serif font-bold leading-tight"><?php echo htmlspecialchars($item['name']); ?></h4>
                         <div class="flex justify-between items-center mt-1">
                             <span class="text-gray-500 text-xs"><?php echo formatCurrency($item['price']); ?></span>
@@ -576,17 +691,10 @@ $totalAmount = $subtotal + $taxAmount;
                     <span id="panelTotalAmount" class="font-bold text-xl text-brand-black"><?php echo formatCurrency($totalAmount); ?></span>
                 </div>
 
-                <?php if (!empty($_SESSION['cart'])): ?>
-                <button onclick="showClearCartModal()" class="w-full mb-3 bg-red-50 text-red-600 border border-red-200 py-2.5 rounded-xl font-bold text-sm hover:bg-red-600 hover:text-white transition-colors flex items-center justify-center gap-2">
-                    <i class="fa-solid fa-trash-can"></i>
-                    Clear All
-                </button>
-                <?php endif; ?>
-
                 <div class="grid grid-cols-[1fr_auto] gap-2 mb-3">
-                    <button onclick="showAmountReceivedModal()" class="bg-white text-brand-black py-3 rounded-xl font-bold text-sm hover:bg-gray-100 transition-colors border border-gray-300 flex items-center justify-center gap-2">
-                        <i class="fa-solid fa-money-bill-transfer"></i>
-                        Amount Given
+                    <button onclick="showAmountReceivedModal()" class="bg-white text-brand-black py-2.5 rounded-xl font-bold text-sm hover:bg-gray-100 transition-colors border border-gray-300 flex flex-col items-center justify-center gap-0.5">
+                        <span class="flex items-center gap-2"><i class="fa-solid fa-money-bill-transfer"></i>Amount Given</span>
+                        <span id="amountGivenButtonLabel" class="text-[10px] font-bold text-gray-500 leading-none"><?php echo formatCurrency(0); ?></span>
                     </button>
                     <div class="bg-white border border-gray-200 rounded-xl px-3 py-2 min-w-[105px] text-right">
                         <p class="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Change</p>
@@ -596,13 +704,29 @@ $totalAmount = $subtotal + $taxAmount;
 
                 <!-- Action Buttons -->
                 <div class="grid grid-cols-3 gap-2">
-                    <button onclick="showPaymentModal()" class="bg-brand-black text-brand py-3 rounded-xl font-bold text-sm hover:bg-gray-800 transition-colors border border-transparent flex items-center justify-center gap-2">
-                        <i class="fa-solid fa-credit-card"></i>
-                        Payment
-                    </button>
-                    <button onclick="showCouponModal()" class="bg-gray-100 text-brand-black py-3 rounded-xl font-bold text-sm hover:bg-gray-200 transition-colors border border-gray-300 flex items-center justify-center gap-2">
-                        <i class="fa-solid fa-ticket"></i>
-                        Coupon
+                    <div class="relative">
+                        <button onclick="togglePaymentDropup()" class="w-full bg-brand-black text-brand py-2.5 rounded-xl font-bold text-sm hover:bg-gray-800 transition-colors border border-transparent flex flex-col items-center justify-center gap-0.5">
+                            <span class="flex items-center gap-2"><i class="fa-solid fa-credit-card"></i>Payment</span>
+                            <span id="paymentButtonLabel" class="text-[10px] font-bold text-brand/80 leading-none">Cash</span>
+                        </button>
+                        <div id="paymentDropup" class="hidden absolute bottom-[calc(100%+0.5rem)] left-0 right-0 bg-white border border-gray-200 rounded-xl shadow-2xl p-2 z-30">
+                            <button type="button" onclick="selectPaymentMethod('cash', 'Cash'); hidePaymentDropup();" class="payment-option w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-left border-2 border-brand-black bg-brand text-brand-black shadow-[2px_2px_0px_0px_rgba(23,23,23,1)] transition-transform active:translate-y-0.5 active:shadow-none" data-payment-method="cash">
+                                <span class="flex items-center gap-2 text-sm font-bold"><i class="fa-solid fa-money-bill-wave"></i>Cash</span>
+                                <i class="payment-check fa-solid fa-check text-brand-black"></i>
+                            </button>
+                            <button type="button" onclick="selectPaymentMethod('card', 'Card'); hidePaymentDropup();" class="payment-option w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-left border border-gray-200 bg-white hover:bg-gray-50 mt-2 transition-colors" data-payment-method="card">
+                                <span class="flex items-center gap-2 text-sm font-bold text-gray-600"><i class="fa-regular fa-credit-card"></i>Card</span>
+                                <i class="payment-check fa-solid fa-check text-brand-black hidden"></i>
+                            </button>
+                            <button type="button" onclick="selectPaymentMethod('gcash', 'GCash'); hidePaymentDropup();" class="payment-option w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-left border border-gray-200 bg-white hover:bg-gray-50 mt-2 transition-colors" data-payment-method="gcash">
+                                <span class="flex items-center gap-2 text-sm font-bold text-gray-600"><i class="fa-solid fa-mobile-screen"></i>GCash</span>
+                                <i class="payment-check fa-solid fa-check text-brand-black hidden"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <button onclick="showCouponModal()" class="bg-gray-100 text-brand-black py-2.5 rounded-xl font-bold text-sm hover:bg-gray-200 transition-colors border border-gray-300 flex flex-col items-center justify-center gap-0.5">
+                        <span class="flex items-center gap-2"><i class="fa-solid fa-ticket"></i>Coupon</span>
+                        <span id="couponButtonLabel" class="text-[10px] font-bold text-gray-500 leading-none">None</span>
                     </button>
                     <button onclick="showBillModal()" class="bg-brand-black text-brand py-3 rounded-xl font-bold text-sm hover:bg-gray-800 transition-colors border border-transparent flex items-center justify-center gap-2">
                         <i class="fa-solid fa-print"></i>
@@ -771,23 +895,23 @@ $totalAmount = $subtotal + $taxAmount;
 
     <!-- Bill Modal -->
     <div id="billModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
-        <div class="bg-white rounded-2xl max-w-md w-full mx-4 shadow-2xl border border-gray-200 max-h-[90vh] overflow-y-auto">
+        <div class="bg-white rounded-2xl max-w-lg w-full mx-4 shadow-2xl border border-gray-200 max-h-[92vh] overflow-y-auto">
             <!-- Bill Header -->
             <div class="p-6 border-b border-gray-100">
                 <div class="text-center mb-4">
-                    <h3 class="text-2xl font-serif font-bold text-brand-black mb-2">Coffee at Yellow Hauz</h3>
-                    <p class="text-xs text-gray-500">Yellow Hauz, Philippines</p>
-                    <p class="text-xs text-gray-500">+63 912 345 6789</p>
+                    <h3 class="text-3xl font-serif font-bold text-brand-black mb-2">Coffee at Yellow Hauz</h3>
+                    <p class="text-sm text-gray-500">Yellow Hauz, Philippines</p>
+                    <p class="text-sm text-gray-500">+63 912 345 6789</p>
                 </div>
                 
                 <div class="flex justify-between items-center mb-4">
                     <div>
-                        <p id="billTableLabel" class="text-sm font-bold text-brand-black">Select Table</p>
-                        <p id="billOrderTypeLabel" class="text-xs text-gray-500">Dine In</p>
+                        <p id="billTableLabel" class="text-base font-bold text-brand-black">Select Table</p>
+                        <p id="billOrderTypeLabel" class="text-sm text-gray-500">Dine In</p>
                     </div>
                     <div class="text-right">
-                        <p class="text-xs text-gray-500">Order #<?php echo date('Ymd') . rand(100, 999); ?></p>
-                        <p class="text-xs text-gray-500"><?php echo date('M d, Y h:i A'); ?></p>
+                        <p class="text-sm text-gray-500">Order #<?php echo date('Ymd') . rand(100, 999); ?></p>
+                        <p class="text-sm text-gray-500"><?php echo date('M d, Y h:i A'); ?></p>
                     </div>
                 </div>
                 
@@ -805,10 +929,10 @@ $totalAmount = $subtotal + $taxAmount;
                         <?php foreach ($_SESSION['cart'] as $item): ?>
                         <div class="flex justify-between items-start">
                             <div class="flex-1">
-                                <p class="text-sm font-medium text-brand-black"><?php echo htmlspecialchars($item['name']); ?></p>
-                                <p class="text-xs text-gray-500"><?php echo $item['quantity']; ?> × <?php echo formatCurrency($item['price']); ?></p>
+                                <p class="text-base font-medium text-brand-black"><?php echo htmlspecialchars($item['name']); ?></p>
+                                <p class="text-sm text-gray-500"><?php echo $item['quantity']; ?> × <?php echo formatCurrency($item['price']); ?></p>
                             </div>
-                            <p class="text-sm font-bold text-brand-black"><?php echo formatCurrency($item['price'] * $item['quantity']); ?></p>
+                            <p class="text-base font-bold text-brand-black"><?php echo formatCurrency($item['price'] * $item['quantity']); ?></p>
                         </div>
                         <?php endforeach; ?>
                     <?php else: ?>
@@ -853,10 +977,10 @@ $totalAmount = $subtotal + $taxAmount;
             <div class="p-6 border-t border-gray-100 bg-gray-50">
                 <p class="text-center text-xs text-gray-500 mb-4">Thank you for visiting Coffee at Yellow Hauz!</p>
                 <div class="flex gap-3">
-                    <button onclick="hideBillModal()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">
+                    <button onclick="hideBillModal()" class="flex-1 bg-gray-100 text-gray-700 py-4 rounded-xl font-bold hover:bg-gray-200 transition-colors">
                         Close
                     </button>
-                    <button onclick="printBill()" class="flex-1 bg-brand-black text-brand py-3 rounded-xl font-bold hover:bg-gray-800 transition-colors">
+                    <button onclick="printBill()" class="flex-1 bg-brand-black text-brand py-4 rounded-xl font-bold hover:bg-gray-800 transition-colors">
                         <i class="fa-solid fa-print mr-2"></i> Print
                     </button>
                 </div>
@@ -864,117 +988,71 @@ $totalAmount = $subtotal + $taxAmount;
         </div>
     </div>
 
-    <!-- Payment Modal -->
-    <div id="paymentModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
-        <div class="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-200">
-            <div class="flex items-center justify-center w-16 h-16 bg-brand-light rounded-full mx-auto mb-4">
-                <i class="fa-solid fa-credit-card text-brand-dark text-2xl"></i>
-            </div>
-            <h3 class="text-xl font-serif font-bold text-brand-black text-center mb-2">Payment Method</h3>
-            <p class="text-gray-600 text-center mb-6">Choose how the customer will pay</p>
-            
-            <div class="space-y-3">
-                <button type="button" onclick="selectPaymentMethod('cash', 'Cash')" class="payment-option w-full flex items-center justify-between p-4 border-2 border-brand-black bg-brand text-brand-black rounded-xl shadow-[2px_2px_0px_0px_rgba(23,23,23,1)] transition-transform active:translate-y-0.5 active:shadow-none" data-payment-method="cash">
-                    <div class="flex items-center gap-3">
-                        <i class="fa-solid fa-money-bill-wave text-xl"></i>
-                        <span class="font-bold">Cash</span>
-                    </div>
-                    <i class="payment-check fa-solid fa-check text-brand-black"></i>
-                </button>
-                
-                <button type="button" onclick="selectPaymentMethod('card', 'Card')" class="payment-option w-full flex items-center justify-between p-4 border border-gray-300 rounded-xl hover:border-brand-black bg-white transition-colors" data-payment-method="card">
-                    <div class="flex items-center gap-3">
-                        <i class="fa-regular fa-credit-card text-xl text-gray-600"></i>
-                        <span class="font-bold text-gray-600">Card</span>
-                    </div>
-                    <i class="payment-check fa-solid fa-check text-brand-black hidden"></i>
-                </button>
-                
-                <button type="button" onclick="selectPaymentMethod('gcash', 'GCash')" class="payment-option w-full flex items-center justify-between p-4 border border-gray-300 rounded-xl hover:border-brand-black bg-white transition-colors" data-payment-method="gcash">
-                    <div class="flex items-center gap-3">
-                        <i class="fa-solid fa-mobile-screen text-xl text-gray-600"></i>
-                        <span class="font-bold text-gray-600">GCash</span>
-                    </div>
-                    <i class="payment-check fa-solid fa-check text-brand-black hidden"></i>
-                </button>
-            </div>
-            
-            <div class="flex gap-3 mt-6">
-                <button onclick="hidePaymentModal()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">
-                    Cancel
-                </button>
-                <button onclick="applyPaymentMethod()" class="flex-1 bg-brand-black text-brand py-3 rounded-xl font-bold hover:bg-gray-800 transition-colors">
-                    Use Method
-                </button>
-            </div>
-        </div>
-    </div>
-
     <!-- Amount Received Modal -->
     <div id="amountReceivedModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
-        <div class="relative bg-white rounded-2xl p-6 max-w-2xl w-full mx-4 shadow-2xl border border-gray-200">
-            <button type="button" onclick="hideAmountReceivedModal()" class="absolute top-4 right-4 w-9 h-9 rounded-full bg-gray-100 text-gray-500 hover:text-brand-black hover:bg-gray-200 transition-colors">
+        <div class="relative bg-white rounded-2xl p-7 max-w-4xl w-full mx-4 shadow-2xl border border-gray-200">
+            <button type="button" onclick="hideAmountReceivedModal()" class="absolute top-4 right-4 w-11 h-11 rounded-full bg-gray-100 text-gray-500 hover:text-brand-black hover:bg-gray-200 transition-colors">
                 <i class="fa-solid fa-xmark"></i>
             </button>
-            <div class="flex items-center justify-center w-16 h-16 bg-brand-light rounded-full mx-auto mb-4">
-                <i class="fa-solid fa-money-bill-transfer text-brand-dark text-2xl"></i>
+            <div class="flex items-center justify-center w-20 h-20 bg-brand-light rounded-full mx-auto mb-4">
+                <i class="fa-solid fa-money-bill-transfer text-brand-dark text-3xl"></i>
             </div>
-            <h3 class="text-xl font-serif font-bold text-brand-black text-center mb-2">Amount Given</h3>
-            <p class="text-gray-600 text-center mb-6">Enter the amount received from the customer</p>
+            <h3 class="text-2xl font-serif font-bold text-brand-black text-center mb-2">Amount Given</h3>
+            <p class="text-gray-600 text-center mb-7">Enter the amount received from the customer</p>
 
-            <div class="grid grid-cols-1 md:grid-cols-[1fr_220px] gap-5 items-start">
-                <div class="space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-[1fr_340px] gap-7 items-start">
+                <div class="space-y-5">
                     <div>
                         <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Customer Amount</label>
-                        <input id="amountReceivedInput" type="number" min="0" step="0.01" placeholder="0.00" oninput="updateAmountReceived()" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                        <input id="amountReceivedInput" type="number" min="0" step="0.01" placeholder="0.00" oninput="updateAmountReceived()" class="w-full bg-white border border-gray-200 rounded-xl px-5 py-4 text-2xl font-bold focus:outline-none focus:ring-2 focus:ring-brand">
                     </div>
 
-                    <div class="bg-gray-50 rounded-xl p-4 border border-gray-200 space-y-2">
-                        <div class="flex justify-between text-sm">
+                    <div class="bg-gray-50 rounded-xl p-5 border border-gray-200 space-y-3">
+                        <div class="flex justify-between text-base">
                             <span class="text-gray-600">Total Due</span>
                             <span id="amountModalTotal" class="font-bold text-brand-black"><?php echo formatCurrency($totalAmount); ?></span>
                         </div>
-                        <div class="flex justify-between text-sm">
+                        <div class="flex justify-between text-base">
                             <span class="text-gray-600">Change</span>
                             <span id="amountModalChange" class="font-bold text-brand-black"><?php echo formatCurrency(0); ?></span>
                         </div>
                     </div>
 
                     <div class="flex gap-3">
-                        <button onclick="clearAmountReceived()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">
+                        <button onclick="clearAmountReceived()" class="flex-1 bg-gray-100 text-gray-700 py-4 rounded-xl font-bold hover:bg-gray-200 transition-colors">
                             Clear
                         </button>
-                        <button onclick="confirmAmountReceived()" class="flex-1 bg-brand-black text-brand py-3 rounded-xl font-bold hover:bg-gray-800 transition-colors">
+                        <button onclick="confirmAmountReceived()" class="flex-1 bg-brand-black text-brand py-4 rounded-xl font-bold hover:bg-gray-800 transition-colors">
                             Done
                         </button>
                     </div>
                 </div>
 
-                <div class="space-y-3">
-                    <div class="grid grid-cols-3 gap-2">
-                        <button type="button" onclick="setAmountReceivedPreset(1000)" class="bg-brand-light border border-brand rounded-xl py-3 text-sm font-bold text-brand-black hover:bg-brand transition-colors">1000</button>
-                        <button type="button" onclick="setAmountReceivedPreset(500)" class="bg-brand-light border border-brand rounded-xl py-3 text-sm font-bold text-brand-black hover:bg-brand transition-colors">500</button>
-                        <button type="button" onclick="setAmountReceivedPreset(200)" class="bg-brand-light border border-brand rounded-xl py-3 text-sm font-bold text-brand-black hover:bg-brand transition-colors">200</button>
-                        <button type="button" onclick="setAmountReceivedPreset(100)" class="bg-brand-light border border-brand rounded-xl py-3 text-sm font-bold text-brand-black hover:bg-brand transition-colors">100</button>
-                        <button type="button" onclick="setAmountReceivedPreset(50)" class="bg-brand-light border border-brand rounded-xl py-3 text-sm font-bold text-brand-black hover:bg-brand transition-colors">50</button>
-                        <button type="button" onclick="setAmountReceivedPreset(20)" class="bg-brand-light border border-brand rounded-xl py-3 text-sm font-bold text-brand-black hover:bg-brand transition-colors">20</button>
+                <div class="space-y-4">
+                    <div class="grid grid-cols-3 gap-3">
+                        <button type="button" onclick="setAmountReceivedPreset(1000)" class="bg-brand-light border border-brand rounded-xl py-4 text-lg font-bold text-brand-black hover:bg-brand transition-colors">1000</button>
+                        <button type="button" onclick="setAmountReceivedPreset(500)" class="bg-brand-light border border-brand rounded-xl py-4 text-lg font-bold text-brand-black hover:bg-brand transition-colors">500</button>
+                        <button type="button" onclick="setAmountReceivedPreset(200)" class="bg-brand-light border border-brand rounded-xl py-4 text-lg font-bold text-brand-black hover:bg-brand transition-colors">200</button>
+                        <button type="button" onclick="setAmountReceivedPreset(100)" class="bg-brand-light border border-brand rounded-xl py-4 text-lg font-bold text-brand-black hover:bg-brand transition-colors">100</button>
+                        <button type="button" onclick="setAmountReceivedPreset(50)" class="bg-brand-light border border-brand rounded-xl py-4 text-lg font-bold text-brand-black hover:bg-brand transition-colors">50</button>
+                        <button type="button" onclick="setAmountReceivedPreset(20)" class="bg-brand-light border border-brand rounded-xl py-4 text-lg font-bold text-brand-black hover:bg-brand transition-colors">20</button>
                     </div>
 
-                    <div class="grid grid-cols-3 gap-2">
-                        <button type="button" onclick="pressAmountKey('7')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">7</button>
-                        <button type="button" onclick="pressAmountKey('8')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">8</button>
-                        <button type="button" onclick="pressAmountKey('9')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">9</button>
-                        <button type="button" onclick="pressAmountKey('4')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">4</button>
-                        <button type="button" onclick="pressAmountKey('5')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">5</button>
-                        <button type="button" onclick="pressAmountKey('6')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">6</button>
-                        <button type="button" onclick="pressAmountKey('1')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">1</button>
-                        <button type="button" onclick="pressAmountKey('2')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">2</button>
-                        <button type="button" onclick="pressAmountKey('3')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">3</button>
-                        <button type="button" onclick="backspaceAmountReceived()" class="bg-gray-100 border border-gray-300 rounded-xl py-4 text-lg font-bold text-gray-700 hover:bg-gray-200 transition-colors">
+                    <div class="grid grid-cols-3 gap-3">
+                        <button type="button" onclick="pressAmountKey('7')" class="bg-white border border-gray-300 rounded-xl py-6 text-2xl font-bold hover:bg-gray-100 transition-colors">7</button>
+                        <button type="button" onclick="pressAmountKey('8')" class="bg-white border border-gray-300 rounded-xl py-6 text-2xl font-bold hover:bg-gray-100 transition-colors">8</button>
+                        <button type="button" onclick="pressAmountKey('9')" class="bg-white border border-gray-300 rounded-xl py-6 text-2xl font-bold hover:bg-gray-100 transition-colors">9</button>
+                        <button type="button" onclick="pressAmountKey('4')" class="bg-white border border-gray-300 rounded-xl py-6 text-2xl font-bold hover:bg-gray-100 transition-colors">4</button>
+                        <button type="button" onclick="pressAmountKey('5')" class="bg-white border border-gray-300 rounded-xl py-6 text-2xl font-bold hover:bg-gray-100 transition-colors">5</button>
+                        <button type="button" onclick="pressAmountKey('6')" class="bg-white border border-gray-300 rounded-xl py-6 text-2xl font-bold hover:bg-gray-100 transition-colors">6</button>
+                        <button type="button" onclick="pressAmountKey('1')" class="bg-white border border-gray-300 rounded-xl py-6 text-2xl font-bold hover:bg-gray-100 transition-colors">1</button>
+                        <button type="button" onclick="pressAmountKey('2')" class="bg-white border border-gray-300 rounded-xl py-6 text-2xl font-bold hover:bg-gray-100 transition-colors">2</button>
+                        <button type="button" onclick="pressAmountKey('3')" class="bg-white border border-gray-300 rounded-xl py-6 text-2xl font-bold hover:bg-gray-100 transition-colors">3</button>
+                        <button type="button" onclick="backspaceAmountReceived()" class="bg-gray-100 border border-gray-300 rounded-xl py-6 text-2xl font-bold text-gray-700 hover:bg-gray-200 transition-colors">
                             <i class="fa-solid fa-delete-left"></i>
                         </button>
-                        <button type="button" onclick="pressAmountKey('0')" class="bg-white border border-gray-300 rounded-xl py-4 text-lg font-bold hover:bg-gray-100 transition-colors">0</button>
-                        <button type="button" onclick="pressAmountKey('.')" class="bg-gray-100 border border-gray-300 rounded-xl py-4 text-lg font-bold text-gray-700 hover:bg-gray-200 transition-colors">.</button>
+                        <button type="button" onclick="pressAmountKey('0')" class="bg-white border border-gray-300 rounded-xl py-6 text-2xl font-bold hover:bg-gray-100 transition-colors">0</button>
+                        <button type="button" onclick="pressAmountKey('.')" class="bg-gray-100 border border-gray-300 rounded-xl py-6 text-2xl font-bold text-gray-700 hover:bg-gray-200 transition-colors">.</button>
                     </div>
                 </div>
             </div>
@@ -1132,10 +1210,28 @@ $totalAmount = $subtotal + $taxAmount;
             restoreSelectedTable();
             updateSelectedDiscountDisplay();
             updatePaymentMethodDisplay();
+            updateAmountReceivedDisplay();
+            enableBackdropClose();
             if (lowStockCount > 0) {
                 showNotification(lowStockCount + ' low stock item(s) need attention', 'warning');
             }
         });
+
+        function enableBackdropClose() {
+            document.addEventListener('click', function(event) {
+                const modal = event.target;
+                if (!(modal instanceof HTMLElement) || !modal.id.endsWith('Modal')) {
+                    return;
+                }
+
+                if (modal.id === 'printConfirmationModal') {
+                    modal.remove();
+                    return;
+                }
+
+                modal.classList.add('hidden');
+            });
+        }
 
         function selectMenuType(type) {
             window.location.href = 'menu.php?type=' + encodeURIComponent(type);
@@ -1463,10 +1559,13 @@ $totalAmount = $subtotal + $taxAmount;
             selectedCustomerName = null;
             selectedPaymentMethod = 'cash';
             selectedPaymentLabel = 'Cash';
+            selectedDiscount = null;
+            selectedDiscountPercent = 0;
             amountReceived = 0;
             localStorage.removeItem('selectedTableId');
             localStorage.removeItem('selectedTableName');
             updatePaymentMethodDisplay();
+            updateSelectedDiscountDisplay();
             updateAmountReceivedDisplay();
             clearCartNoReturn();
             hideBillModal();
@@ -1674,12 +1773,17 @@ $totalAmount = $subtotal + $taxAmount;
         function updateAmountReceivedDisplay() {
             const totals = getDiscountTotals();
             const changeAmount = getChangeAmount();
+            const amountGivenButtonLabel = document.getElementById('amountGivenButtonLabel');
             const panelChangeAmount = document.getElementById('panelChangeAmount');
             const billAmountReceived = document.getElementById('billAmountReceived');
             const billChangeAmount = document.getElementById('billChangeAmount');
             const amountModalTotal = document.getElementById('amountModalTotal');
             const amountModalChange = document.getElementById('amountModalChange');
 
+            if (amountGivenButtonLabel) {
+                amountGivenButtonLabel.textContent = amountReceived > 0 ? formatPeso(amountReceived) : formatPeso(0);
+                amountGivenButtonLabel.className = amountReceived > 0 ? 'text-[10px] font-bold text-brand-black leading-none' : 'text-[10px] font-bold text-gray-500 leading-none';
+            }
             if (panelChangeAmount) panelChangeAmount.textContent = formatPeso(changeAmount);
             if (billAmountReceived) billAmountReceived.textContent = formatPeso(amountReceived);
             if (billChangeAmount) billChangeAmount.textContent = formatPeso(changeAmount);
@@ -1689,10 +1793,15 @@ $totalAmount = $subtotal + $taxAmount;
 
         function updateSelectedDiscountDisplay() {
             const discountLabel = document.getElementById('selectedDiscountLabel') || document.querySelector('#couponModal .bg-gray-50 span:last-child');
+            const couponButtonLabel = document.getElementById('couponButtonLabel');
             const discountText = selectedDiscount ? selectedDiscount + ' (' + selectedDiscountPercent + '%)' : 'None';
             if (discountLabel) {
                 discountLabel.textContent = discountText;
                 discountLabel.className = selectedDiscount ? 'font-bold text-brand-black' : 'font-bold text-gray-400';
+            }
+            if (couponButtonLabel) {
+                couponButtonLabel.textContent = discountText;
+                couponButtonLabel.className = selectedDiscount ? 'text-[10px] font-bold text-brand-black leading-none max-w-full truncate' : 'text-[10px] font-bold text-gray-500 leading-none';
             }
 
             const billDiscountHeader = document.getElementById('billDiscountHeader');
@@ -1734,12 +1843,18 @@ $totalAmount = $subtotal + $taxAmount;
             hideCouponModal();
         }
 
-        function showPaymentModal() {
-            document.getElementById('paymentModal').classList.remove('hidden');
+        function togglePaymentDropup() {
+            const dropup = document.getElementById('paymentDropup');
+            if (dropup) {
+                dropup.classList.toggle('hidden');
+            }
         }
-        
-        function hidePaymentModal() {
-            document.getElementById('paymentModal').classList.add('hidden');
+
+        function hidePaymentDropup() {
+            const dropup = document.getElementById('paymentDropup');
+            if (dropup) {
+                dropup.classList.add('hidden');
+            }
         }
 
         function selectPaymentMethod(method, label) {
@@ -1750,8 +1865,12 @@ $totalAmount = $subtotal + $taxAmount;
 
         function updatePaymentMethodDisplay() {
             const billPaymentMethodLabel = document.getElementById('billPaymentMethodLabel');
+            const paymentButtonLabel = document.getElementById('paymentButtonLabel');
             if (billPaymentMethodLabel) {
                 billPaymentMethodLabel.textContent = 'Payment: ' + selectedPaymentLabel;
+            }
+            if (paymentButtonLabel) {
+                paymentButtonLabel.textContent = selectedPaymentLabel || 'Cash';
             }
 
             document.querySelectorAll('.payment-option').forEach(button => {
@@ -1773,7 +1892,7 @@ $totalAmount = $subtotal + $taxAmount;
 
         function applyPaymentMethod() {
             showNotification('Payment method set to ' + selectedPaymentLabel, 'success');
-            hidePaymentModal();
+            hidePaymentDropup();
         }
 
         function setOrderType(type) {
@@ -1900,6 +2019,54 @@ $totalAmount = $subtotal + $taxAmount;
                 if (userName) userName.classList.remove('hidden');
             }
         });
+
+        // Time-based menu collapse toggle
+        const timeMenuPanel = document.getElementById('timeMenuPanel');
+        const timeMenuToggle = document.getElementById('timeMenuToggle');
+        const timeMenuContent = document.getElementById('timeMenuContent');
+        const timeMenuHeaderText = document.getElementById('timeMenuHeaderText');
+        const timeMenuCollapsedIcon = document.getElementById('timeMenuCollapsedIcon');
+        let isTimeMenuCollapsed = localStorage.getItem('timeMenuCollapsed') === 'true';
+
+        function applyTimeMenuState() {
+            if (!timeMenuContent) return;
+            if (isTimeMenuCollapsed) {
+                timeMenuContent.classList.add('hidden');
+                if (timeMenuPanel) {
+                    timeMenuPanel.classList.remove('w-[170px]');
+                    timeMenuPanel.classList.add('w-[52px]');
+                }
+                if (timeMenuHeaderText) {
+                    timeMenuHeaderText.classList.add('hidden');
+                }
+                if (timeMenuCollapsedIcon) {
+                    timeMenuCollapsedIcon.classList.remove('hidden');
+                    timeMenuCollapsedIcon.classList.add('flex');
+                }
+            } else {
+                timeMenuContent.classList.remove('hidden');
+                if (timeMenuPanel) {
+                    timeMenuPanel.classList.remove('w-[52px]');
+                    timeMenuPanel.classList.add('w-[170px]');
+                }
+                if (timeMenuHeaderText) {
+                    timeMenuHeaderText.classList.remove('hidden');
+                }
+                if (timeMenuCollapsedIcon) {
+                    timeMenuCollapsedIcon.classList.add('hidden');
+                    timeMenuCollapsedIcon.classList.remove('flex');
+                }
+            }
+        }
+
+        if (timeMenuToggle) {
+            applyTimeMenuState();
+            timeMenuToggle.addEventListener('click', () => {
+                isTimeMenuCollapsed = !isTimeMenuCollapsed;
+                localStorage.setItem('timeMenuCollapsed', String(isTimeMenuCollapsed));
+                applyTimeMenuState();
+            });
+        }
     </script>
     <?php include 'staff_chatbot.php'; ?>
 </body>

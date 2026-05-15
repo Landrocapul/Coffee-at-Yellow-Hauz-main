@@ -4,25 +4,25 @@
       "tag": "help",
       "patterns": ["help", "what can you do", "guide me", "staff guide", "how does this chatbot work", "what can I ask"],
       "keywords": ["help", "guide", "assist", "support", "chatbot", "question", "ask"],
-      "response": "I can guide staff through orders, cart changes, discounts, payments, receipts, tables, tickets, stock, menu items, reports, users, and settings. Ask a short question like 'how do I take a dine-in order?' or 'how do I restock an item?'"
+      "response": "Hi! ☕ I can guide staff through orders, cart changes, discounts, payments, receipts, tables, tickets, stock, menu items, reports, users, and settings ✨ Ask a short question like 'how do I take a dine-in order?' or 'how do I restock an item?'"
     },
     {
       "tag": "take_order",
       "patterns": ["take order", "new order", "create order", "customer order", "start order", "how do I take an order"],
       "keywords": ["order", "start", "create", "customer", "menu", "new", "serve"],
-      "response": "To take an order: open Menu, choose a category, add items to the cart, adjust quantities, choose the order type, add customer/table details if needed, select payment, then complete and print the receipt."
+      "response": "Steps to take an order ✅:\n1. Open Menu.\n2. Choose a category and add items to cart.\n3. Adjust quantities in the order panel.\n4. Select order type (Dine In or Take Out).\n5. If Dine In, select the table.\n6. Set payment method and amount received.\n7. Review totals, then complete and print receipt. 🎉"
     },
     {
       "tag": "dine_in_order",
       "patterns": ["dine in order", "table order", "serve table", "select table", "assign table", "customer will dine in"],
       "keywords": ["dine", "dinein", "table", "seat", "serve", "occupied", "assign"],
-      "response": "For dine-in: add the items from Menu, choose dine-in at checkout, select an available table, confirm payment, then complete the order. The selected table becomes occupied until the ticket is completed or cancelled."
+      "response": "Dine-in flow 🍽️:\n1. Open Menu and add items.\n2. In order panel, choose Dine In.\n3. Select an available table.\n4. Confirm payment method and amount.\n5. Complete order and print receipt.\n6. Table stays occupied until ticket is completed or cancelled."
     },
     {
       "tag": "takeaway_order",
       "patterns": ["takeaway order", "take away order", "to go order", "pickup order", "customer takeaway", "no table order"],
       "keywords": ["takeaway", "take", "away", "pickup", "go", "tableless", "carryout"],
-      "response": "For takeaway: add items to the cart, choose takeaway as the order type, skip table selection, select the payment method, then complete and print the receipt."
+      "response": "Take-out flow 🛍️:\n1. Open Menu and add items.\n2. Choose Take Out in the order panel.\n3. Skip table selection.\n4. Select payment method.\n5. Complete order and print receipt."
     },
     {
       "tag": "cart_quantity",
@@ -34,7 +34,7 @@
       "tag": "payments",
       "patterns": ["process payment", "cash payment", "gcash payment", "card payment", "choose payment", "customer will pay"],
       "keywords": ["payment", "pay", "cash", "gcash", "card", "paid", "settle"],
-      "response": "At checkout, select Cash, Card, or GCash. For cash, enter the amount received so the system can calculate change. Confirm the order after the payment details are correct."
+      "response": "Payment steps 💳:\n1. In the order panel, choose Cash, Card, or GCash.\n2. If Cash, enter amount given.\n3. Verify computed change.\n4. Confirm details and complete the order."
     },
     {
       "tag": "cash_change",
@@ -58,7 +58,7 @@
       "tag": "tables",
       "patterns": ["table status", "available table", "occupied table", "reserved table", "table services", "check tables"],
       "keywords": ["table", "available", "occupied", "reserved", "service", "chair", "status"],
-      "response": "Open Table Services to view table availability. Available tables can be assigned to dine-in orders. Occupied tables usually have an active order attached."
+      "response": "Table Services steps 🪑:\n1. Open Table Services from the sidebar.\n2. Use status and area filters to find a table.\n3. Check table card status (Available, Occupied, Reserved, Cleaning).\n4. Assign available tables during Dine In checkout."
     },
     {
       "tag": "release_table",
@@ -70,13 +70,13 @@
       "tag": "tickets",
       "patterns": ["view tickets", "active tickets", "order ticket", "ticket list", "find order status"],
       "keywords": ["ticket", "tickets", "active", "status", "order", "queue", "processing"],
-      "response": "Open Tickets to see active and recent orders. Use search or filters to find a ticket, review order details, print it, complete it, or cancel it."
+      "response": "Tickets steps 🎟️:\n1. Open Tickets from sidebar.\n2. Use filters/search to find an order.\n3. Open ticket details.\n4. Choose action: Print, Complete, or Cancel."
     },
     {
       "tag": "complete_ticket",
       "patterns": ["complete ticket", "mark order completed", "finish order", "order served", "complete order"],
       "keywords": ["complete", "completed", "finish", "served", "done", "ticket", "order"],
-      "response": "In Tickets, open the order and choose Complete when it has been served or settled. For dine-in orders, completing the ticket also frees the table."
+      "response": "Complete ticket steps:\n1. Open Tickets.\n2. Select the target order.\n3. Click Complete.\n4. Confirm action.\n5. If dine-in, table is automatically freed."
     },
     {
       "tag": "cancel_ticket",
@@ -100,7 +100,7 @@
       "tag": "restock_item",
       "patterns": ["restock item", "add stock", "update quantity", "increase inventory", "add item quantity"],
       "keywords": ["restock", "stock", "quantity", "inventory", "add", "increase", "supply"],
-      "response": "Admins can restock from Manage Food Items. Find the item, click the restock action, enter the quantity to add, and save. The new quantity will appear in the menu inventory."
+      "response": "Restock steps (Admin) 📦:\n1. Open Manage Food Items.\n2. Locate item (search or filter).\n3. Use +1 / +5 / +10 for quick stock, or open restock modal.\n4. Save changes.\n5. Confirm updated quantity appears."
     },
     {
       "tag": "item_availability",
@@ -112,7 +112,7 @@
       "tag": "menu_management",
       "patterns": ["manage food items", "add item", "edit item", "archive item", "delete item", "change item price"],
       "keywords": ["manage", "food", "item", "dish", "add", "edit", "archive", "price"],
-      "response": "Admins can open Manage Food Items to add dishes, edit names, prices, descriptions, images, temperatures, availability, and stock. Archive items instead of removing important sales history."
+      "response": "Manage Food Items steps (Admin):\n1. Open Manage Food Items.\n2. Add new dish or edit an existing one.\n3. Update price, stock, image, and availability.\n4. Save changes.\n5. Archive old items instead of deleting sales history."
     },
     {
       "tag": "category_management",
@@ -130,7 +130,7 @@
       "tag": "sales_report",
       "patterns": ["sales report", "view sales", "daily sales", "transactions", "sales filter", "export sales"],
       "keywords": ["sales", "report", "daily", "transactions", "filter", "export", "revenue"],
-      "response": "Admins can open Sales Report to review revenue, order count, average order value, payment methods, and transactions. Use filters to narrow the date or search terms."
+      "response": "Sales Report steps (Admin):\n1. Open Sales Report.\n2. Apply date/filter options.\n3. Review revenue, orders, AOV, and payment mix.\n4. Open transactions for detailed checking."
     },
     {
       "tag": "product_analytics",
@@ -148,7 +148,7 @@
       "tag": "users",
       "patterns": ["add staff", "manage users", "add cashier", "deactivate user", "admin account", "cashier account"],
       "keywords": ["user", "staff", "cashier", "admin", "account", "deactivate", "employee"],
-      "response": "Admins can manage staff from Settings. Add users with the correct role, update account details when needed, and deactivate accounts that should no longer access the POS."
+      "response": "User management steps (Admin):\n1. Open Settings.\n2. Go to user/staff management section.\n3. Add or edit user details and role.\n4. Save updates.\n5. Deactivate accounts that should no longer access POS."
     },
     {
       "tag": "profile_password",

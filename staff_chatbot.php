@@ -7,8 +7,8 @@ if (!function_exists('isLoggedIn') || !isLoggedIn()) {
     <section id="staffChatbotPanel" class="hidden fixed bottom-5 left-[96px] z-[9999] w-[360px] max-w-[calc(100vw-2rem)] bg-white border border-gray-200 rounded-2xl shadow-2xl overflow-hidden">
         <div class="bg-brand-black text-white px-4 py-3 flex items-center justify-between">
             <div>
-                <p class="text-sm font-bold">Staff Guide</p>
-                <p class="text-[11px] text-white/70">Ask about POS workflows</p>
+                <p class="text-sm font-bold">BrewMate AI</p>
+                <p class="text-[11px] text-white/70">Assistant for staff and admin workflows</p>
             </div>
             <button type="button" id="staffChatbotClose" class="w-8 h-8 rounded-lg hover:bg-white/10 flex items-center justify-center" title="Close staff guide">
                 <i class="fa-solid fa-xmark"></i>
@@ -17,7 +17,18 @@ if (!function_exists('isLoggedIn') || !isLoggedIn()) {
 
         <div id="staffChatbotMessages" class="h-80 overflow-y-auto p-4 space-y-3 bg-[#F8F7F3]">
             <div class="max-w-[85%] bg-white border border-gray-200 rounded-2xl rounded-tl-md px-3 py-2 text-sm text-gray-700 shadow-sm">
-                Hi! Ask me how to take orders, handle payments, manage tickets, check stock, or view reports.
+                Hello! ☕ I’m BrewMate AI. I can guide you step-by-step so staff and admins can use the POS smoothly ✨
+            </div>
+            <div class="max-w-[95%] bg-white border border-gray-200 rounded-2xl rounded-tl-md px-3 py-2 shadow-sm">
+                <p class="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-2">Quick Topics</p>
+                <div class="flex flex-wrap gap-2">
+                    <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-brand-light text-brand-black border border-brand/40">How to take order</button>
+                    <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Dine-in table flow</button>
+                    <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Complete ticket</button>
+                    <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Restock item</button>
+                    <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Manage users</button>
+                    <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Sales report guide</button>
+                </div>
             </div>
         </div>
 
@@ -30,13 +41,8 @@ if (!function_exists('isLoggedIn') || !isLoggedIn()) {
                     <button type="button" id="staffChatbotTeachSave" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-brand-black text-brand hover:bg-brand-dark hover:text-white">Save Lesson</button>
                 </div>
             </div>
-            <div class="flex gap-2 mb-2 overflow-x-auto pb-1">
-                <button type="button" class="staff-chatbot-suggestion shrink-0 text-xs font-semibold px-3 py-1.5 rounded-full bg-brand-light text-brand-black border border-brand/40">Take order</button>
-                <button type="button" class="staff-chatbot-suggestion shrink-0 text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Complete ticket</button>
-                <button type="button" class="staff-chatbot-suggestion shrink-0 text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Low stock</button>
-            </div>
             <form id="staffChatbotForm" class="flex items-center gap-2">
-                <input id="staffChatbotInput" type="text" autocomplete="off" placeholder="Ask staff guide..." class="flex-1 h-10 rounded-xl border border-gray-200 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                <input id="staffChatbotInput" type="text" autocomplete="off" placeholder="Ask BrewMate AI..." class="flex-1 h-10 rounded-xl border border-gray-200 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
                 <button type="submit" class="w-10 h-10 rounded-xl bg-brand-black text-brand flex items-center justify-center hover:bg-brand-dark hover:text-white transition-colors" title="Send">
                     <i class="fa-solid fa-paper-plane"></i>
                 </button>
@@ -66,9 +72,9 @@ if (!function_exists('isLoggedIn') || !isLoggedIn()) {
     const toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.id = 'staffChatbotToggle';
-    toggle.title = 'Staff guide';
+    toggle.title = 'BrewMate AI';
     toggle.className = 'w-full flex items-center gap-3 text-gray-500 hover:text-brand-black hover:bg-gray-100 px-4 py-2 font-medium transition-all rounded-xl';
-    toggle.innerHTML = '<i class="fa-solid fa-headset w-5 text-center"></i> <span class="nav-text">Staff Guide</span>';
+    toggle.innerHTML = '<i class="fa-solid fa-headset w-5 text-center"></i> <span class="nav-text">BrewMate AI</span>';
     const toggleLabel = toggle.querySelector('.nav-text');
 
     if (sidebar) {
@@ -103,12 +109,59 @@ if (!function_exists('isLoggedIn') || !isLoggedIn()) {
 
     syncSidebarState();
 
+    const formatStepsReply = (text) => {
+        const normalized = String(text || '').replace(/\r\n/g, '\n');
+        const match = normalized.match(/^(.*?):\s*(1\..*)$/s);
+        if (!match) return null;
+
+        const title = match[1].trim();
+        const stepsPart = match[2].trim();
+        const rawSteps = stepsPart.split(/\n?\s*(?=\d+\.)/).map((item) => item.trim()).filter(Boolean);
+        if (rawSteps.length < 2) return null;
+
+        const steps = rawSteps.map((item) => item.replace(/^\d+\.\s*/, '').trim()).filter(Boolean);
+        if (steps.length < 2) return null;
+
+        return { title, steps };
+    };
+
     const addMessage = (text, sender) => {
         const bubble = document.createElement('div');
         bubble.className = sender === 'user'
             ? 'ml-auto max-w-[85%] bg-brand text-brand-black rounded-2xl rounded-tr-md px-3 py-2 text-sm font-medium shadow-sm'
             : 'max-w-[85%] bg-white border border-gray-200 rounded-2xl rounded-tl-md px-3 py-2 text-sm text-gray-700 shadow-sm';
-        bubble.textContent = text;
+        if (sender === 'bot') {
+            const structured = formatStepsReply(text);
+            if (structured) {
+                const title = document.createElement('p');
+                title.className = 'text-xs font-bold uppercase tracking-wider text-gray-500 mb-2';
+                title.textContent = structured.title;
+                bubble.appendChild(title);
+
+                const flow = document.createElement('div');
+                flow.className = 'space-y-1.5';
+
+                structured.steps.forEach((step, index) => {
+                    const stepBox = document.createElement('div');
+                    stepBox.className = 'rounded-lg border border-gray-200 bg-[#F8F7F3] px-2.5 py-2 text-xs text-gray-700';
+                    stepBox.textContent = `${index + 1}. ${step}`;
+                    flow.appendChild(stepBox);
+
+                    if (index < structured.steps.length - 1) {
+                        const arrow = document.createElement('div');
+                        arrow.className = 'text-center text-[10px] text-gray-400 font-bold';
+                        arrow.textContent = '↓';
+                        flow.appendChild(arrow);
+                    }
+                });
+
+                bubble.appendChild(flow);
+            } else {
+                bubble.textContent = text;
+            }
+        } else {
+            bubble.textContent = text;
+        }
         messages.appendChild(bubble);
         messages.scrollTop = messages.scrollHeight;
         return bubble;

@@ -48,6 +48,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         } catch (Exception $e) {
             flashAndRedirect('error', 'Failed to update settings: ' . $e->getMessage());
         }
+    } elseif ($action === 'update_time_menus') {
+        try {
+            $timeMenus = [];
+            $titles = $_POST['time_menu_title'] ?? [];
+            $times = $_POST['time_menu_time'] ?? [];
+            $starts = $_POST['time_menu_start'] ?? [];
+            $ends = $_POST['time_menu_end'] ?? [];
+            $focuses = $_POST['time_menu_focus'] ?? [];
+            $items = $_POST['time_menu_items'] ?? [];
+            $itemNames = $_POST['time_menu_item_names'] ?? [];
+
+            foreach ($titles as $index => $title) {
+                $cleanTitle = sanitize($title);
+                $cleanTime = sanitize($times[$index] ?? '');
+                $cleanStart = sanitize($starts[$index] ?? '00:00');
+                $cleanEnd = sanitize($ends[$index] ?? '23:59');
+                $cleanFocus = sanitize($focuses[$index] ?? '');
+                $lines = array_values(array_filter(array_map(
+                    fn($line) => sanitize($line),
+                    preg_split('/\r\n|\r|\n/', $items[$index] ?? '')
+                )));
+                $names = array_values(array_filter(array_map(
+                    fn($line) => trim(strip_tags($line)),
+                    preg_split('/\r\n|\r|\n/', $itemNames[$index] ?? '')
+                )));
+
+                if ($cleanTitle === '' && $cleanTime === '' && $cleanFocus === '' && empty($lines)) {
+                    continue;
+                }
+
+                $timeMenus[] = [
+                    'title' => $cleanTitle,
+                    'time' => $cleanTime,
+                    'start' => $cleanStart,
+                    'end' => $cleanEnd,
+                    'focus' => $cleanFocus,
+                    'item_names' => $names,
+                    'items' => $lines,
+                ];
+            }
+
+            if (empty($timeMenus)) {
+                throw new Exception('Please keep at least one time-based menu section.');
+            }
+
+            updateSetting('time_based_menus', json_encode($timeMenus, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+            flashAndRedirect('success', 'Time-based menu updated successfully.');
+        } catch (Exception $e) {
+            flashAndRedirect('error', 'Failed to update time-based menu: ' . $e->getMessage());
+        }
     } elseif ($action === 'add_user') {
         $employeeId = sanitize($_POST['employee_id']);
         $username = sanitize($_POST['username']);
@@ -146,6 +196,7 @@ $settings = [
     'receipt_footer' => getSetting('receipt_footer') ?? 'Thank you for visiting Coffee at Yellow Hauz!',
     'business_hours' => getSetting('business_hours') ?? '07:00-22:00'
 ];
+$timeMenus = getTimeMenus();
 
 // Get all users
 $stmt = $pdo->query("SELECT * FROM users ORDER BY role, full_name ASC");
@@ -390,6 +441,69 @@ $settingsUpdatedAt = $stmt->fetch()['updated_at'] ?? null;
                         <p class="text-center text-xs text-gray-500"><?php echo htmlspecialchars($settings['receipt_footer']); ?></p>
                     </div>
                 </div>
+                </div>
+
+                <!-- Time-Based Menu Editor -->
+                <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 mb-6">
+                    <div class="flex items-center justify-between gap-4 mb-5">
+                        <div class="flex items-center gap-3">
+                            <div class="w-11 h-11 rounded-xl bg-brand-light text-brand-dark flex items-center justify-center border border-brand/30">
+                                <i class="fa-solid fa-clock"></i>
+                            </div>
+                            <div>
+                                <h3 class="font-serif text-xl font-bold text-brand-black">Time-Based Menu</h3>
+                                <p class="text-xs text-gray-500">Edit the Morning, Lunch/Afternoon, and Dinner guide shown beside the POS menu</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <form action="settings.php" method="POST" class="space-y-4">
+                        <input type="hidden" name="action" value="update_time_menus">
+                        <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                            <?php foreach ($timeMenus as $index => $timeMenu): ?>
+                            <div class="border border-gray-200 rounded-2xl p-4 bg-gray-50">
+                                <div class="space-y-3">
+                                    <div>
+                                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Section Title</label>
+                                        <input type="text" name="time_menu_title[]" value="<?php echo htmlspecialchars($timeMenu['title'] ?? ''); ?>" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Time Range</label>
+                                        <input type="text" name="time_menu_time[]" value="<?php echo htmlspecialchars($timeMenu['time'] ?? ''); ?>" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Start</label>
+                                            <input type="time" name="time_menu_start[]" value="<?php echo htmlspecialchars($timeMenu['start'] ?? '00:00'); ?>" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">End</label>
+                                            <input type="time" name="time_menu_end[]" value="<?php echo htmlspecialchars($timeMenu['end'] ?? '23:59'); ?>" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Focus</label>
+                                        <textarea name="time_menu_focus[]" rows="3" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand resize-none"><?php echo htmlspecialchars($timeMenu['focus'] ?? ''); ?></textarea>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Featured Item Names</label>
+                                        <textarea name="time_menu_item_names[]" rows="8" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand resize-none"><?php echo htmlspecialchars(implode("\n", $timeMenu['item_names'] ?? [])); ?></textarea>
+                                        <p class="text-[10px] text-gray-500 mt-1">One exact menu item name per line.</p>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Notes</label>
+                                        <textarea name="time_menu_items[]" rows="4" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand resize-none"><?php echo htmlspecialchars(implode("\n", $timeMenu['items'] ?? [])); ?></textarea>
+                                    </div>
+                                </div>
+                            </div>
+                            <?php endforeach; ?>
+                        </div>
+                        <div class="flex justify-end pt-2">
+                            <button type="submit" class="bg-brand-black text-brand px-6 py-2.5 rounded-xl font-bold text-sm shadow-[2px_2px_0px_0px_rgba(251,191,36,1)] hover:bg-gray-800 transition-all active:translate-y-0.5 active:translate-x-0.5 active:shadow-none uppercase tracking-wide border border-transparent">
+                                Save Time Menu
+                            </button>
+                        </div>
+                    </form>
                 </div>
 
                 <!-- User Management -->

@@ -26,12 +26,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $image_url = sanitize($_POST['image_url']);
         $temperature = sanitize($_POST['temperature']);
         $quantity = max(0, (int)($_POST['quantity'] ?? 0));
-        $is_best_seller = isset($_POST['is_best_seller']) ? 1 : 0;
         $is_available = isset($_POST['is_available']) ? 1 : 0;
         
         try {
-            $stmt = $pdo->prepare("INSERT INTO menu_items (category_id, name, description, price, image_url, temperature, is_best_seller, is_available, quantity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
-            $stmt->execute([$category_id, $name, $description, $price, $image_url, $temperature, $is_best_seller, $is_available, $quantity]);
+            $stmt = $pdo->prepare("INSERT INTO menu_items (category_id, name, description, price, image_url, temperature, is_available, quantity) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt->execute([$category_id, $name, $description, $price, $image_url, $temperature, $is_available, $quantity]);
             redirect('items.php?category=' . $category_id);
         } catch (PDOException $e) {
             $error = 'Failed to add item: ' . $e->getMessage();
@@ -45,12 +44,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $image_url = sanitize($_POST['image_url']);
         $temperature = sanitize($_POST['temperature']);
         $quantity = max(0, (int)($_POST['quantity'] ?? 0));
-        $is_best_seller = isset($_POST['is_best_seller']) ? 1 : 0;
         $is_available = isset($_POST['is_available']) ? 1 : 0;
         
         try {
-            $stmt = $pdo->prepare("UPDATE menu_items SET category_id = ?, name = ?, description = ?, price = ?, image_url = ?, temperature = ?, quantity = ?, is_best_seller = ?, is_available = ? WHERE id = ?");
-            $stmt->execute([$category_id, $name, $description, $price, $image_url, $temperature, $quantity, $is_best_seller, $is_available, $id]);
+            $stmt = $pdo->prepare("UPDATE menu_items SET category_id = ?, name = ?, description = ?, price = ?, image_url = ?, temperature = ?, quantity = ?, is_available = ? WHERE id = ?");
+            $stmt->execute([$category_id, $name, $description, $price, $image_url, $temperature, $quantity, $is_available, $id]);
             redirect('items.php?category=' . $category_id);
         } catch (PDOException $e) {
             $error = 'Failed to update item: ' . $e->getMessage();
@@ -73,6 +71,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('items.php');
         } catch (PDOException $e) {
             $error = 'Failed to update stock: ' . $e->getMessage();
+        }
+    } elseif ($action === 'quick_add_stock') {
+        $id = (int)$_POST['item_id'];
+        $addQty = max(1, (int)($_POST['add_quantity'] ?? 0));
+        try {
+            $stmt = $pdo->prepare("UPDATE menu_items SET quantity = quantity + ? WHERE id = ?");
+            $stmt->execute([$addQty, $id]);
+            redirect('items.php');
+        } catch (PDOException $e) {
+            $error = 'Failed to add stock: ' . $e->getMessage();
         }
     } elseif ($action === 'add_category') {
         $name = sanitize($_POST['category_name']);
@@ -410,9 +418,14 @@ $totalItems = array_sum($categoryCounts);
                                         <td class="py-3 px-4 text-sm text-gray-600"><?php echo htmlspecialchars($item['category_name']); ?></td>
                                         <td class="py-3 px-4 text-sm font-bold text-brand-black"><?php echo formatCurrency($item['price']); ?></td>
                                         <td class="py-3 px-4">
-                                            <button onclick="showRestockModal(<?php echo (int)$item['id']; ?>, <?php echo $quantity; ?>)" class="text-sm font-bold <?php echo $isOut ? 'text-red-600' : ($isLow ? 'text-yellow-700' : 'text-gray-700'); ?> hover:underline">
-                                                <?php echo $quantity; ?>
-                                            </button>
+                                            <div class="flex items-center gap-2">
+                                                <button onclick="showRestockModal(<?php echo (int)$item['id']; ?>, <?php echo $quantity; ?>)" class="text-sm font-bold <?php echo $isOut ? 'text-red-600' : ($isLow ? 'text-yellow-700' : 'text-gray-700'); ?> hover:underline">
+                                                    <?php echo $quantity; ?>
+                                                </button>
+                                                <button type="button" onclick="quickAddStock(<?php echo (int)$item['id']; ?>, 1)" class="text-[10px] font-bold px-1.5 py-0.5 rounded border border-gray-200 bg-gray-50 hover:bg-gray-100">+1</button>
+                                                <button type="button" onclick="quickAddStock(<?php echo (int)$item['id']; ?>, 5)" class="text-[10px] font-bold px-1.5 py-0.5 rounded border border-gray-200 bg-gray-50 hover:bg-gray-100">+5</button>
+                                                <button type="button" onclick="quickAddStock(<?php echo (int)$item['id']; ?>, 10)" class="text-[10px] font-bold px-1.5 py-0.5 rounded border border-gray-200 bg-gray-50 hover:bg-gray-100">+10</button>
+                                            </div>
                                         </td>
                                         <td class="py-3 px-4">
                                             <div class="flex flex-wrap gap-1">
@@ -476,7 +489,12 @@ $totalItems = array_sum($categoryCounts);
                                     <span class="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-0.5"><?php echo htmlspecialchars($item['category_name']); ?></span>
                                     <h4 class="font-serif font-bold text-brand-black text-sm leading-tight line-clamp-1"><?php echo htmlspecialchars($item['name']); ?></h4>
                                     <span class="font-bold text-brand-black mt-1"><?php echo formatCurrency($item['price']); ?></span>
-                                    <button onclick="showRestockModal(<?php echo (int)$item['id']; ?>, <?php echo $quantity; ?>)" class="text-xs <?php echo $isOut ? 'text-red-600 font-bold' : ($isLow ? 'text-yellow-700 font-bold' : 'text-gray-500'); ?> mt-0.5 text-left hover:underline">Qty: <?php echo $quantity; ?></button>
+                                    <div class="mt-0.5 flex items-center gap-1.5">
+                                        <button onclick="showRestockModal(<?php echo (int)$item['id']; ?>, <?php echo $quantity; ?>)" class="text-xs <?php echo $isOut ? 'text-red-600 font-bold' : ($isLow ? 'text-yellow-700 font-bold' : 'text-gray-500'); ?> text-left hover:underline">Qty: <?php echo $quantity; ?></button>
+                                        <button type="button" onclick="quickAddStock(<?php echo (int)$item['id']; ?>, 1)" class="text-[10px] font-bold px-1.5 py-0.5 rounded border border-gray-200 bg-gray-50 hover:bg-gray-100">+1</button>
+                                        <button type="button" onclick="quickAddStock(<?php echo (int)$item['id']; ?>, 5)" class="text-[10px] font-bold px-1.5 py-0.5 rounded border border-gray-200 bg-gray-50 hover:bg-gray-100">+5</button>
+                                        <button type="button" onclick="quickAddStock(<?php echo (int)$item['id']; ?>, 10)" class="text-[10px] font-bold px-1.5 py-0.5 rounded border border-gray-200 bg-gray-50 hover:bg-gray-100">+10</button>
+                                    </div>
                                 </div>
                             </div>
                             <?php endforeach; ?>
@@ -499,14 +517,18 @@ $totalItems = array_sum($categoryCounts);
 
     <!-- Add Item Modal -->
     <div id="addItemModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 hidden">
-        <div class="bg-white rounded-2xl p-6 max-w-lg w-full mx-4 shadow-2xl border border-gray-200 max-h-[90vh] overflow-y-auto">
-            <h3 class="text-xl font-serif font-bold text-brand-black mb-4">Add New Dish</h3>
+        <div class="bg-white rounded-2xl p-6 max-w-2xl w-full mx-4 shadow-2xl border border-gray-200 max-h-[90vh] overflow-y-auto">
+            <div class="mb-4 pb-3 border-b border-gray-100">
+                <h3 class="text-xl font-serif font-bold text-brand-black">Add New Dish</h3>
+                <p class="text-xs text-gray-500 mt-1">Create item details and set opening stock quickly.</p>
+            </div>
             <form action="<?php echo htmlspecialchars(itemsUrl()); ?>" method="POST" class="space-y-4">
                 <input type="hidden" name="action" value="add_item">
                 
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                     <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Name</label>
-                    <input type="text" name="name" required class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                    <input type="text" name="name" required placeholder="e.g. Spanish Latte" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
                 </div>
                 
                 <div>
@@ -517,20 +539,27 @@ $totalItems = array_sum($categoryCounts);
                         <?php endforeach; ?>
                     </select>
                 </div>
-                
+
                 <div>
                     <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Price</label>
-                    <input type="number" step="0.01" name="price" required class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                    <input type="number" step="0.01" name="price" required placeholder="0.00" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
                 </div>
                 
                 <div>
                     <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Quantity</label>
-                    <input type="number" name="quantity" min="0" value="0" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                    <input type="number" name="quantity" min="0" value="0" id="addItemQuantity" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                    <div class="grid grid-cols-4 gap-2 mt-2">
+                        <button type="button" onclick="setAddQuantity(0)" class="bg-gray-100 text-gray-700 py-1.5 rounded-lg text-xs font-bold hover:bg-gray-200">0</button>
+                        <button type="button" onclick="setAddQuantity(5)" class="bg-gray-100 text-gray-700 py-1.5 rounded-lg text-xs font-bold hover:bg-gray-200">+5</button>
+                        <button type="button" onclick="setAddQuantity(10)" class="bg-gray-100 text-gray-700 py-1.5 rounded-lg text-xs font-bold hover:bg-gray-200">+10</button>
+                        <button type="button" onclick="setAddQuantity(20)" class="bg-gray-100 text-gray-700 py-1.5 rounded-lg text-xs font-bold hover:bg-gray-200">+20</button>
+                    </div>
+                </div>
                 </div>
                 
                 <div>
                     <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Image URL</label>
-                    <input type="url" name="image_url" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
+                    <input type="url" name="image_url" placeholder="https://... or /images/item.webp" class="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand">
                 </div>
                 
                 <div>
@@ -549,10 +578,6 @@ $totalItems = array_sum($categoryCounts);
                 </div>
                 
                 <div class="flex items-center gap-4">
-                    <label class="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" name="is_best_seller" class="w-4 h-4 rounded border-gray-300">
-                        <span class="text-sm font-medium">Best Seller</span>
-                    </label>
                     <label class="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" name="is_available" checked class="w-4 h-4 rounded border-gray-300">
                         <span class="text-sm font-medium">Available</span>
@@ -625,10 +650,6 @@ $totalItems = array_sum($categoryCounts);
                 </div>
 
                 <div class="flex items-center gap-4">
-                    <label class="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" name="is_best_seller" id="editItemBestSeller" class="w-4 h-4 rounded border-gray-300">
-                        <span class="text-sm font-medium">Best Seller</span>
-                    </label>
                     <label class="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" name="is_available" id="editItemAvailable" class="w-4 h-4 rounded border-gray-300">
                         <span class="text-sm font-medium">Available</span>
@@ -839,6 +860,12 @@ $totalItems = array_sum($categoryCounts);
             document.getElementById('addItemModal').classList.add('hidden');
         }
 
+        function setAddQuantity(value) {
+            const input = document.getElementById('addItemQuantity');
+            if (!input) return;
+            input.value = Math.max(0, Number(value) || 0);
+        }
+
         function showEditItemModal(itemId) {
             const item = itemsData.find(item => item.id === Number(itemId));
             if (!item) return;
@@ -851,7 +878,6 @@ $totalItems = array_sum($categoryCounts);
             document.getElementById('editItemImage').value = item.image_url || '';
             document.getElementById('editItemDescription').value = item.description || '';
             document.getElementById('editItemTemperature').value = item.temperature || 'both';
-            document.getElementById('editItemBestSeller').checked = item.is_best_seller === 1;
             document.getElementById('editItemAvailable').checked = item.is_available === 1;
             document.getElementById('editItemModal').classList.remove('hidden');
         }
@@ -875,6 +901,33 @@ $totalItems = array_sum($categoryCounts);
         function adjustRestock(amount) {
             const input = document.getElementById('restockQuantity');
             input.value = Math.max(0, (Number(input.value) || 0) + amount);
+        }
+
+        function quickAddStock(itemId, addQty) {
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = currentItemsUrl;
+
+            const actionInput = document.createElement('input');
+            actionInput.type = 'hidden';
+            actionInput.name = 'action';
+            actionInput.value = 'quick_add_stock';
+
+            const itemIdInput = document.createElement('input');
+            itemIdInput.type = 'hidden';
+            itemIdInput.name = 'item_id';
+            itemIdInput.value = itemId;
+
+            const addQtyInput = document.createElement('input');
+            addQtyInput.type = 'hidden';
+            addQtyInput.name = 'add_quantity';
+            addQtyInput.value = addQty;
+
+            form.appendChild(actionInput);
+            form.appendChild(itemIdInput);
+            form.appendChild(addQtyInput);
+            document.body.appendChild(form);
+            form.submit();
         }
 
         function showAddCategoryModal() {
