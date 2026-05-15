@@ -501,7 +501,7 @@ $totalAmount = $subtotal + $taxAmount;
                         </button>
                     </div>
                     <?php foreach ($visibleCategories as $category): ?>
-                    <div class="w-full h-[44px] <?php echo $category['id'] == $selectedCategoryId ? 'bg-brand text-brand-black' : 'bg-white'; ?> rounded-xl flex items-center justify-start gap-1 px-1.5 cursor-pointer shadow-sm border <?php echo $category['id'] == $selectedCategoryId ? 'border-brand/30' : 'border-gray-200 hover:border-brand'; ?> transition-all" onclick="selectCategory(<?php echo $category['id']; ?>)">
+                    <div class="w-full h-[44px] <?php echo $category['id'] == $selectedCategoryId ? 'bg-brand text-brand-black' : 'bg-white'; ?> rounded-xl flex items-center justify-start gap-1 px-1.5 cursor-pointer shadow-sm border <?php echo $category['id'] == $selectedCategoryId ? 'border-brand-black/40' : 'border-gray-400 hover:border-brand-black'; ?> transition-all" onclick="selectCategory(<?php echo $category['id']; ?>)">
                         <div class="w-7 h-7 flex items-center justify-center text-sm"><i class="<?php echo htmlspecialchars($category['icon']); ?>"></i></div>
                         <span class="font-bold text-[11px] leading-tight"><?php echo htmlspecialchars($category['name']); ?></span>
                     </div>
@@ -522,7 +522,7 @@ $totalAmount = $subtotal + $taxAmount;
 
                     <?php foreach ($menuItems as $item): ?>
                     <?php $isOutOfStock = (int)($item['quantity'] ?? 0) <= 0; ?>
-                    <div class="bg-white <?php echo $useXLargeItemCards ? 'p-3 gap-2.5' : ($useLargeItemCards ? 'p-2.5 gap-2' : 'p-1.5 gap-1'); ?> rounded-xl shadow-sm border <?php echo $isOutOfStock ? 'border-red-100 opacity-60 cursor-not-allowed' : 'border-gray-200 hover:shadow-md cursor-pointer hover:border-brand'; ?> flex items-stretch self-start transition-all group" <?php if (!$isOutOfStock): ?>onclick="addToCart(<?php echo $item['id']; ?>)"<?php endif; ?>>
+                    <div class="bg-white <?php echo $useXLargeItemCards ? 'p-3 gap-2.5' : ($useLargeItemCards ? 'p-2.5 gap-2' : 'p-1.5 gap-1'); ?> rounded-xl shadow-sm border <?php echo $isOutOfStock ? 'border-red-100 opacity-60 cursor-not-allowed' : 'border-gray-500 hover:shadow-md cursor-pointer hover:border-brand-black'; ?> flex items-stretch self-start transition-all group" <?php if (!$isOutOfStock): ?>onclick="addToCart(<?php echo $item['id']; ?>)"<?php endif; ?>>
                         <div class="relative <?php echo $useXLargeItemCards ? 'w-[108px] h-[108px]' : ($useLargeItemCards ? 'w-[92px] h-[92px]' : 'w-[70px] h-[70px]'); ?> shrink-0 rounded-lg overflow-hidden bg-gray-100 border border-gray-100">
                             <?php if ($item['is_best_seller']): ?>
                             <span class="absolute top-1 left-1 bg-brand text-brand-black text-[8px] font-bold px-1.5 py-0.5 rounded z-10 uppercase tracking-wide border border-brand-black">Best</span>
@@ -2071,3 +2071,6 @@ $totalAmount = $subtotal + $taxAmount;
     <?php include 'staff_chatbot.php'; ?>
 </body>
 </html>
+
+
+

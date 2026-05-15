@@ -336,25 +336,25 @@ foreach ($tables as $index => $table) {
                         ?>
                         <div class="relative w-full <?php echo $tableHeight; ?>">
                             <?php if ($isLargeTable): ?>
-                            <div class="absolute -left-3 top-1/2 -translate-y-1/2 flex flex-col justify-center gap-3 z-0 h-[88%]">
+                            <div class="absolute -left-5 top-1/2 -translate-y-1/2 flex flex-col justify-center gap-4 z-0 h-[90%]">
                                 <?php for ($chair = 0; $chair < $firstSideChairs; $chair++): ?>
-                                <div class="w-6 h-10 border-2 border-gray-300 rounded-l-full bg-white"></div>
+                                <div class="w-9 h-14 border-2 border-gray-400 rounded-l-full bg-white"></div>
                                 <?php endfor; ?>
                             </div>
-                            <div class="absolute -right-3 top-1/2 -translate-y-1/2 flex flex-col justify-center gap-3 z-0 h-[88%]">
+                            <div class="absolute -right-5 top-1/2 -translate-y-1/2 flex flex-col justify-center gap-4 z-0 h-[90%]">
                                 <?php for ($chair = 0; $chair < $secondSideChairs; $chair++): ?>
-                                <div class="w-6 h-10 border-2 border-gray-300 rounded-r-full bg-white"></div>
+                                <div class="w-9 h-14 border-2 border-gray-400 rounded-r-full bg-white"></div>
                                 <?php endfor; ?>
                             </div>
                             <?php else: ?>
-                            <div class="absolute -top-3 left-1/2 -translate-x-1/2 flex justify-center gap-4 z-0 w-full">
+                            <div class="absolute -top-5 left-1/2 -translate-x-1/2 flex justify-center gap-5 z-0 w-full">
                                 <?php for ($chair = 0; $chair < $firstSideChairs; $chair++): ?>
-                                <div class="w-10 h-6 border-2 border-gray-300 rounded-t-full bg-white"></div>
+                                <div class="w-14 h-9 border-2 border-gray-400 rounded-t-full bg-white"></div>
                                 <?php endfor; ?>
                             </div>
-                            <div class="absolute -bottom-3 left-1/2 -translate-x-1/2 flex justify-center gap-4 z-0 w-full">
+                            <div class="absolute -bottom-5 left-1/2 -translate-x-1/2 flex justify-center gap-5 z-0 w-full">
                                 <?php for ($chair = 0; $chair < $secondSideChairs; $chair++): ?>
-                                <div class="w-10 h-6 border-2 border-gray-300 rounded-b-full bg-white"></div>
+                                <div class="w-14 h-9 border-2 border-gray-400 rounded-b-full bg-white"></div>
                                 <?php endfor; ?>
                             </div>
                             <?php endif; ?>
@@ -704,3 +704,5 @@ foreach ($tables as $index => $table) {
     <?php include 'staff_chatbot.php'; ?>
 </body>
 </html>
+
+
