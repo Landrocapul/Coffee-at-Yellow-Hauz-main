@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 if (!function_exists('isLoggedIn') || !isLoggedIn()) {
     return;
 }
@@ -6,9 +6,14 @@ if (!function_exists('isLoggedIn') || !isLoggedIn()) {
 <div id="staffChatbot" class="font-sans">
     <section id="staffChatbotPanel" class="hidden fixed bottom-5 left-[96px] z-[9999] w-[360px] max-w-[calc(100vw-2rem)] bg-white border border-gray-200 rounded-2xl shadow-2xl overflow-hidden">
         <div class="bg-brand-black text-white px-4 py-3 flex items-center justify-between">
-            <div>
-                <p class="text-sm font-bold">BrewMate AI</p>
-                <p class="text-[11px] text-white/70">Assistant for staff and admin workflows</p>
+            <div class="flex items-center gap-3">
+                <div class="w-9 h-9 rounded-xl bg-brand text-brand-black flex items-center justify-center shadow-sm">
+                    <i class="fa-solid fa-robot text-sm"></i>
+                </div>
+                <div>
+                    <p class="text-sm font-bold">BrewMate AI</p>
+                    <p class="text-[11px] text-white/70">Assistant for staff and admin workflows</p>
+                </div>
             </div>
             <button type="button" id="staffChatbotClose" class="w-8 h-8 rounded-lg hover:bg-white/10 flex items-center justify-center" title="Close staff guide">
                 <i class="fa-solid fa-xmark"></i>
@@ -17,17 +22,25 @@ if (!function_exists('isLoggedIn') || !isLoggedIn()) {
 
         <div id="staffChatbotMessages" class="h-80 overflow-y-auto p-4 space-y-3 bg-[#F8F7F3]">
             <div class="max-w-[85%] bg-white border border-gray-200 rounded-2xl rounded-tl-md px-3 py-2 text-sm text-gray-700 shadow-sm">
-                Hello! ☕ I’m BrewMate AI. I can guide you step-by-step so staff and admins can use the POS smoothly ✨
+                Hello! ☕ I'm BrewMate AI. I can guide you step-by-step so staff and admins can use the POS smoothly ✨
             </div>
             <div class="max-w-[95%] bg-white border border-gray-200 rounded-2xl rounded-tl-md px-3 py-2 shadow-sm">
                 <p class="text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-2">Quick Topics</p>
                 <div class="flex flex-wrap gap-2">
                     <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-brand-light text-brand-black border border-brand/40">How to take order</button>
                     <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Dine-in table flow</button>
+                    <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Take-out flow</button>
+                    <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Process payment</button>
+                    <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Apply discount</button>
+                    <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Print receipt</button>
                     <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Complete ticket</button>
+                    <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Cancel order</button>
+                    <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Check table status</button>
                     <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Restock item</button>
-                    <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Manage users</button>
+                    <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Low stock alerts</button>
                     <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Sales report guide</button>
+                    <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Manage users</button>
+                    <button type="button" class="staff-chatbot-suggestion text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">Login help</button>
                 </div>
             </div>
         </div>
@@ -184,14 +197,16 @@ if (!function_exists('isLoggedIn') || !isLoggedIn()) {
                 body: JSON.stringify({ message: cleanMessage })
             });
             const result = await response.json();
-            loading.textContent = result.success ? result.reply : (result.error || 'The staff guide is unavailable right now.');
+            loading.remove();
+            addMessage(result.success ? result.reply : (result.error || 'The staff guide is unavailable right now.'), 'bot');
             if (result.success && result.needs_training) {
                 pendingQuestion = cleanMessage;
                 teachAnswer.value = '';
                 teachBox.classList.remove('hidden');
             }
         } catch (error) {
-            loading.textContent = 'The staff guide is unavailable right now.';
+            loading.remove();
+            addMessage('The staff guide is unavailable right now.', 'bot');
         } finally {
             input.disabled = false;
             input.focus();
@@ -252,3 +267,6 @@ if (!function_exists('isLoggedIn') || !isLoggedIn()) {
     });
 })();
 </script>
+
+
+

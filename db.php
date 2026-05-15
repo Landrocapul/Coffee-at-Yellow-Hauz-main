@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 // Database Configuration
 define('DB_HOST', 'localhost');
 define('DB_NAME', 'yellow_hauz_pos');
@@ -19,6 +19,12 @@ try {
 } catch (PDOException $e) {
     die("Database connection failed: " . $e->getMessage());
 }
+
+// Application timezone for all date/time logic
+if (!defined('APP_TIMEZONE')) {
+    define('APP_TIMEZONE', 'Asia/Manila');
+}
+date_default_timezone_set(APP_TIMEZONE);
 
 // Start session if not already started
 if (session_status() === PHP_SESSION_NONE) {
@@ -48,7 +54,7 @@ function sanitize($data) {
 
 // Helper function to format currency
 function formatCurrency($amount) {
-    return '₱' . number_format($amount, 2);
+    return "\u{20B1}" . number_format($amount, 2);
 }
 
 // Helper function to generate order number
@@ -219,3 +225,5 @@ function hasCashierAccess() {
     return isAdmin() || isCashier();
 }
 ?>
+
+

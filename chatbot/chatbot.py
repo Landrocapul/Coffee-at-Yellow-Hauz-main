@@ -5,6 +5,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 
 BASE_DIR = Path(__file__).resolve().parent
 INTENTS_FILE = BASE_DIR / "intents.json"

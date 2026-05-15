@@ -230,15 +230,39 @@ try {
                 }
 
                 $configuredPython = trim((string)getenv('CHATBOT_PYTHON'));
-                $pythonCommands = array_filter([$configuredPython, 'python', 'py', 'python3']);
+                $pythonCandidates = array_filter([
+                    $configuredPython,
+                    'C:\\Users\\user\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe',
+                    'py -3',
+                    'python',
+                    'py',
+                    'python3',
+                    'C:\\Python313\\python.exe',
+                    'C:\\Python312\\python.exe',
+                    'C:\\Python311\\python.exe',
+                    'C:\\Users\\user\\AppData\\Local\\Programs\\Python\\Python314\\python.exe'
+                ]);
                 $output = null;
                 $exitCode = 1;
+                $lastError = '';
 
-                foreach ($pythonCommands as $pythonCommand) {
-                    $command = escapeshellarg($pythonCommand) . ' ' . escapeshellarg($scriptPath) . ' ' . escapeshellarg($message) . ' 2>&1';
+                foreach ($pythonCandidates as $pythonCandidate) {
+                    $parts = preg_split('/\s+/', trim($pythonCandidate));
+                    if (!$parts || $parts[0] === '') {
+                        continue;
+                    }
+                    $binary = array_shift($parts);
+                    if (strpos($binary, '\\') !== false && !is_file($binary)) {
+                        continue;
+                    }
+                    $args = $parts ? (' ' . implode(' ', array_map('escapeshellarg', $parts))) : '';
+                    $command = escapeshellarg($binary) . $args . ' ' . escapeshellarg($scriptPath) . ' ' . escapeshellarg($message) . ' 2>&1';
                     $lines = [];
                     exec($command, $lines, $exitCode);
                     $candidateOutput = trim(implode("\n", $lines));
+                    if ($candidateOutput !== '') {
+                        $lastError = $candidateOutput;
+                    }
 
                     if ($exitCode === 0 && $candidateOutput !== '') {
                         $output = $candidateOutput;
@@ -247,7 +271,8 @@ try {
                 }
 
                 if ($exitCode !== 0 || $output === null) {
-                    echo json_encode(['success' => false, 'error' => 'Python chatbot is unavailable. Check that Python is installed and allowed by PHP.']);
+                    $detail = $lastError !== '' ? (' Debug: ' . $lastError) : '';
+                    echo json_encode(['success' => false, 'error' => 'Python chatbot is unavailable. Check that Python is installed and allowed by PHP.' . $detail]);
                     exit;
                 }
 
@@ -291,16 +316,40 @@ try {
                 }
 
                 $configuredPython = trim((string)getenv('CHATBOT_PYTHON'));
-                $pythonCommands = array_filter([$configuredPython, 'python', 'py', 'python3']);
+                $pythonCandidates = array_filter([
+                    $configuredPython,
+                    'C:\\Users\\user\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe',
+                    'py -3',
+                    'python',
+                    'py',
+                    'python3',
+                    'C:\\Python313\\python.exe',
+                    'C:\\Python312\\python.exe',
+                    'C:\\Python311\\python.exe',
+                    'C:\\Users\\user\\AppData\\Local\\Programs\\Python\\Python314\\python.exe'
+                ]);
                 $output = null;
                 $exitCode = 1;
+                $lastError = '';
                 $learnedBy = $currentUser['username'] ?? $currentUser['full_name'] ?? 'staff';
 
-                foreach ($pythonCommands as $pythonCommand) {
-                    $command = escapeshellarg($pythonCommand) . ' ' . escapeshellarg($scriptPath) . ' --learn ' . escapeshellarg($question) . ' ' . escapeshellarg($answer) . ' ' . escapeshellarg($learnedBy) . ' 2>&1';
+                foreach ($pythonCandidates as $pythonCandidate) {
+                    $parts = preg_split('/\s+/', trim($pythonCandidate));
+                    if (!$parts || $parts[0] === '') {
+                        continue;
+                    }
+                    $binary = array_shift($parts);
+                    if (strpos($binary, '\\') !== false && !is_file($binary)) {
+                        continue;
+                    }
+                    $args = $parts ? (' ' . implode(' ', array_map('escapeshellarg', $parts))) : '';
+                    $command = escapeshellarg($binary) . $args . ' ' . escapeshellarg($scriptPath) . ' --learn ' . escapeshellarg($question) . ' ' . escapeshellarg($answer) . ' ' . escapeshellarg($learnedBy) . ' 2>&1';
                     $lines = [];
                     exec($command, $lines, $exitCode);
                     $candidateOutput = trim(implode("\n", $lines));
+                    if ($candidateOutput !== '') {
+                        $lastError = $candidateOutput;
+                    }
 
                     if ($exitCode === 0 && $candidateOutput !== '') {
                         $output = $candidateOutput;
@@ -309,7 +358,8 @@ try {
                 }
 
                 if ($exitCode !== 0 || $output === null) {
-                    echo json_encode(['success' => false, 'error' => 'Python chatbot is unavailable. Check that Python is installed and allowed by PHP.']);
+                    $detail = $lastError !== '' ? (' Debug: ' . $lastError) : '';
+                    echo json_encode(['success' => false, 'error' => 'Python chatbot is unavailable. Check that Python is installed and allowed by PHP.' . $detail]);
                     exit;
                 }
 
