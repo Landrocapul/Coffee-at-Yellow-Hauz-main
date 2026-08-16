@@ -214,7 +214,7 @@
       "tag": "python_unavailable",
       "patterns": ["chatbot unavailable", "python unavailable", "staff guide not working", "bot not responding", "python not installed"],
       "keywords": ["python", "unavailable", "not", "working", "responding", "installed", "chatbot"],
-      "response": "If the staff guide says Python is unavailable, install Python 3 on the server or set CHATBOT_PYTHON to the full Python executable path, then restart Apache."
+      "response": "The staff guide now runs directly in PHP. If it is unavailable, confirm that chatbot/chatbot.php and the intents JSON files are present and readable by Apache."
     },
     {
       "tag": "safe_operations",

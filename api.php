@@ -223,64 +223,8 @@ try {
                     exit;
                 }
 
-                $scriptPath = __DIR__ . DIRECTORY_SEPARATOR . 'chatbot' . DIRECTORY_SEPARATOR . 'chatbot.py';
-                if (!is_file($scriptPath)) {
-                    echo json_encode(['success' => false, 'error' => 'Chatbot script is missing.']);
-                    exit;
-                }
-
-                $configuredPython = trim((string)getenv('CHATBOT_PYTHON'));
-                $pythonCandidates = array_filter([
-                    $configuredPython,
-                    'C:\\Users\\user\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe',
-                    'py -3',
-                    'python',
-                    'py',
-                    'python3',
-                    'C:\\Python313\\python.exe',
-                    'C:\\Python312\\python.exe',
-                    'C:\\Python311\\python.exe',
-                    'C:\\Users\\user\\AppData\\Local\\Programs\\Python\\Python314\\python.exe'
-                ]);
-                $output = null;
-                $exitCode = 1;
-                $lastError = '';
-
-                foreach ($pythonCandidates as $pythonCandidate) {
-                    $parts = preg_split('/\s+/', trim($pythonCandidate));
-                    if (!$parts || $parts[0] === '') {
-                        continue;
-                    }
-                    $binary = array_shift($parts);
-                    if (strpos($binary, '\\') !== false && !is_file($binary)) {
-                        continue;
-                    }
-                    $args = $parts ? (' ' . implode(' ', array_map('escapeshellarg', $parts))) : '';
-                    $command = escapeshellarg($binary) . $args . ' ' . escapeshellarg($scriptPath) . ' ' . escapeshellarg($message) . ' 2>&1';
-                    $lines = [];
-                    exec($command, $lines, $exitCode);
-                    $candidateOutput = trim(implode("\n", $lines));
-                    if ($candidateOutput !== '') {
-                        $lastError = $candidateOutput;
-                    }
-
-                    if ($exitCode === 0 && $candidateOutput !== '') {
-                        $output = $candidateOutput;
-                        break;
-                    }
-                }
-
-                if ($exitCode !== 0 || $output === null) {
-                    $detail = $lastError !== '' ? (' Debug: ' . $lastError) : '';
-                    echo json_encode(['success' => false, 'error' => 'Python chatbot is unavailable. Check that Python is installed and allowed by PHP.' . $detail]);
-                    exit;
-                }
-
-                $botResponse = json_decode($output, true);
-                if (!is_array($botResponse) || !isset($botResponse['reply'])) {
-                    echo json_encode(['success' => false, 'error' => 'Chatbot returned an invalid response.']);
-                    exit;
-                }
+                require_once __DIR__ . DIRECTORY_SEPARATOR . 'chatbot' . DIRECTORY_SEPARATOR . 'chatbot.php';
+                $botResponse = (new StaffChatbot())->answer($message);
 
                 echo json_encode([
                     'success' => true,
@@ -309,63 +253,12 @@ try {
                     exit;
                 }
 
-                $scriptPath = __DIR__ . DIRECTORY_SEPARATOR . 'chatbot' . DIRECTORY_SEPARATOR . 'chatbot.py';
-                if (!is_file($scriptPath)) {
-                    echo json_encode(['success' => false, 'error' => 'Chatbot script is missing.']);
-                    exit;
-                }
-
-                $configuredPython = trim((string)getenv('CHATBOT_PYTHON'));
-                $pythonCandidates = array_filter([
-                    $configuredPython,
-                    'C:\\Users\\user\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe',
-                    'py -3',
-                    'python',
-                    'py',
-                    'python3',
-                    'C:\\Python313\\python.exe',
-                    'C:\\Python312\\python.exe',
-                    'C:\\Python311\\python.exe',
-                    'C:\\Users\\user\\AppData\\Local\\Programs\\Python\\Python314\\python.exe'
-                ]);
-                $output = null;
-                $exitCode = 1;
-                $lastError = '';
                 $learnedBy = $currentUser['username'] ?? $currentUser['full_name'] ?? 'staff';
-
-                foreach ($pythonCandidates as $pythonCandidate) {
-                    $parts = preg_split('/\s+/', trim($pythonCandidate));
-                    if (!$parts || $parts[0] === '') {
-                        continue;
-                    }
-                    $binary = array_shift($parts);
-                    if (strpos($binary, '\\') !== false && !is_file($binary)) {
-                        continue;
-                    }
-                    $args = $parts ? (' ' . implode(' ', array_map('escapeshellarg', $parts))) : '';
-                    $command = escapeshellarg($binary) . $args . ' ' . escapeshellarg($scriptPath) . ' --learn ' . escapeshellarg($question) . ' ' . escapeshellarg($answer) . ' ' . escapeshellarg($learnedBy) . ' 2>&1';
-                    $lines = [];
-                    exec($command, $lines, $exitCode);
-                    $candidateOutput = trim(implode("\n", $lines));
-                    if ($candidateOutput !== '') {
-                        $lastError = $candidateOutput;
-                    }
-
-                    if ($exitCode === 0 && $candidateOutput !== '') {
-                        $output = $candidateOutput;
-                        break;
-                    }
-                }
-
-                if ($exitCode !== 0 || $output === null) {
-                    $detail = $lastError !== '' ? (' Debug: ' . $lastError) : '';
-                    echo json_encode(['success' => false, 'error' => 'Python chatbot is unavailable. Check that Python is installed and allowed by PHP.' . $detail]);
-                    exit;
-                }
-
-                $learnResponse = json_decode($output, true);
-                if (!is_array($learnResponse) || empty($learnResponse['learned'])) {
-                    echo json_encode(['success' => false, 'error' => $learnResponse['error'] ?? 'The chatbot could not save that lesson.']);
+                require_once __DIR__ . DIRECTORY_SEPARATOR . 'chatbot' . DIRECTORY_SEPARATOR . 'chatbot.php';
+                try {
+                    $learnResponse = (new StaffChatbot())->learn($question, $answer, (string)$learnedBy);
+                } catch (InvalidArgumentException | RuntimeException $e) {
+                    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
                     exit;
                 }
 
