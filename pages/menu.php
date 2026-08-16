@@ -1,5 +1,5 @@
 <?php
-require_once 'db.php';
+require_once __DIR__ . '/../db.php';
 
 // Check if user is logged in
 if (!isLoggedIn()) {
@@ -225,6 +225,7 @@ if (!isset($_SESSION['cart'])) {
 
 // Handle cart actions
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    requireCsrfToken();
     $action = $_POST['action'];
     
     if ($action === 'add_to_cart') {
@@ -1241,6 +1242,16 @@ $totalAmount = $subtotal + $taxAmount;
             window.location.href = 'menu.php?type=<?php echo htmlspecialchars($menuType); ?>&category=' + categoryId;
         }
 
+        function submitProtectedForm(form) {
+            const token = document.createElement('input');
+            token.type = 'hidden';
+            token.name = 'csrf_token';
+            token.value = '<?php echo csrfToken(); ?>';
+            form.appendChild(token);
+            document.body.appendChild(form);
+            form.submit();
+        }
+
         function addToCart(itemId) {
             const form = document.createElement('form');
             form.method = 'POST';
@@ -1264,8 +1275,7 @@ $totalAmount = $subtotal + $taxAmount;
             form.appendChild(actionInput);
             form.appendChild(itemIdInput);
             form.appendChild(quantityInput);
-            document.body.appendChild(form);
-            form.submit();
+            submitProtectedForm(form);
         }
 
         function clearCartNoReturn() {
@@ -1279,8 +1289,7 @@ $totalAmount = $subtotal + $taxAmount;
             actionInput.value = 'clear_cart_no_return';
             
             form.appendChild(actionInput);
-            document.body.appendChild(form);
-            form.submit();
+            submitProtectedForm(form);
         }
 
         function showClearCartModal() {
@@ -1302,8 +1311,7 @@ $totalAmount = $subtotal + $taxAmount;
             actionInput.value = 'clear_cart';
             
             form.appendChild(actionInput);
-            document.body.appendChild(form);
-            form.submit();
+            submitProtectedForm(form);
         }
 
         function updateQuantity(itemId, newQuantity) {
@@ -1334,8 +1342,7 @@ $totalAmount = $subtotal + $taxAmount;
             form.appendChild(actionInput);
             form.appendChild(itemIdInput);
             form.appendChild(quantityInput);
-            document.body.appendChild(form);
-            form.submit();
+            submitProtectedForm(form);
         }
 
         function removeFromCart(itemId) {
@@ -1355,8 +1362,7 @@ $totalAmount = $subtotal + $taxAmount;
             
             form.appendChild(actionInput);
             form.appendChild(itemIdInput);
-            document.body.appendChild(form);
-            form.submit();
+            submitProtectedForm(form);
         }
 
         function showLogoutModal() {
@@ -1490,6 +1496,7 @@ $totalAmount = $subtotal + $taxAmount;
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'X-CSRF-Token': '<?php echo csrfToken(); ?>',
                 },
                 body: JSON.stringify(orderData)
             })
@@ -2068,7 +2075,7 @@ $totalAmount = $subtotal + $taxAmount;
             });
         }
     </script>
-    <?php include 'staff_chatbot.php'; ?>
+    <?php include __DIR__ . '/staff_chatbot.php'; ?>
 </body>
 </html>
 

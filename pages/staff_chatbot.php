@@ -554,7 +554,7 @@ if (!function_exists('isLoggedIn') || !isLoggedIn()) {
         try {
             const response = await fetch('api.php?action=staff_chatbot', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': '<?php echo csrfToken(); ?>' },
                 body: JSON.stringify({ message: cleanMessage })
             });
             const result = await response.json();
@@ -656,7 +656,7 @@ if (!function_exists('isLoggedIn') || !isLoggedIn()) {
         try {
             const response = await fetch('api.php?action=staff_chatbot_learn', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': '<?php echo csrfToken(); ?>' },
                 body: JSON.stringify({ question: pendingQuestion, answer })
             });
             const result = await response.json();

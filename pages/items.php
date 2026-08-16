@@ -1,5 +1,5 @@
 <?php
-require_once 'db.php';
+require_once __DIR__ . '/../db.php';
 
 // Check if user is logged in
 if (!isLoggedIn()) {
@@ -16,6 +16,7 @@ $currentUser = getCurrentUser();
 
 // Handle CRUD operations
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    requireCsrfToken();
     $action = $_POST['action'] ?? '';
     
     if ($action === 'add_item') {
@@ -523,6 +524,7 @@ $totalItems = array_sum($categoryCounts);
                 <p class="text-xs text-gray-500 mt-1">Create item details and set opening stock quickly.</p>
             </div>
             <form action="<?php echo htmlspecialchars(itemsUrl()); ?>" method="POST" class="space-y-4">
+                <?php echo csrfField(); ?>
                 <input type="hidden" name="action" value="add_item">
                 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -601,6 +603,7 @@ $totalItems = array_sum($categoryCounts);
         <div class="bg-white rounded-2xl p-6 max-w-lg w-full mx-4 shadow-2xl border border-gray-200 max-h-[90vh] overflow-y-auto">
             <h3 class="text-xl font-serif font-bold text-brand-black mb-4">Edit Dish</h3>
             <form action="<?php echo htmlspecialchars(itemsUrl()); ?>" method="POST" class="space-y-4">
+                <?php echo csrfField(); ?>
                 <input type="hidden" name="action" value="update_item">
                 <input type="hidden" name="item_id" id="editItemId">
 
@@ -670,6 +673,7 @@ $totalItems = array_sum($categoryCounts);
             <h3 class="text-xl font-serif font-bold text-brand-black mb-1">Update Stock</h3>
             <p id="restockItemName" class="text-sm text-gray-500 mb-5">Set current quantity</p>
             <form action="<?php echo htmlspecialchars(itemsUrl()); ?>" method="POST" class="space-y-4">
+                <?php echo csrfField(); ?>
                 <input type="hidden" name="action" value="restock_item">
                 <input type="hidden" name="item_id" id="restockItemId">
                 <div>
@@ -694,6 +698,7 @@ $totalItems = array_sum($categoryCounts);
         <div class="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-200">
             <h3 class="text-xl font-serif font-bold text-brand-black mb-4">Add New Category</h3>
             <form action="<?php echo htmlspecialchars(itemsUrl()); ?>" method="POST" class="space-y-4">
+                <?php echo csrfField(); ?>
                 <input type="hidden" name="action" value="add_category">
                 
                 <div>
@@ -1034,6 +1039,7 @@ $totalItems = array_sum($categoryCounts);
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
+                        'X-CSRF-Token': '<?php echo csrfToken(); ?>',
                     },
                     body: JSON.stringify({
                         id: parseInt(editId),
@@ -1061,6 +1067,7 @@ $totalItems = array_sum($categoryCounts);
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
+                        'X-CSRF-Token': '<?php echo csrfToken(); ?>',
                     },
                     body: JSON.stringify({
                         name: name,
@@ -1112,6 +1119,7 @@ $totalItems = array_sum($categoryCounts);
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
+                        'X-CSRF-Token': '<?php echo csrfToken(); ?>',
                     },
                     body: JSON.stringify({
                         id: id
@@ -1248,6 +1256,6 @@ $totalItems = array_sum($categoryCounts);
             }
         });
     </script>
-    <?php include 'staff_chatbot.php'; ?>
+    <?php include __DIR__ . '/staff_chatbot.php'; ?>
 </body>
 </html>

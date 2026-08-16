@@ -1,5 +1,5 @@
 <?php
-require_once 'db.php';
+require_once __DIR__ . '/../db.php';
 
 // Check if user is logged in
 if (!isLoggedIn()) {
@@ -16,6 +16,7 @@ $currentUser = getCurrentUser();
 
 // Handle table status updates
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    requireCsrfToken();
     $action = $_POST['action'];
     $tableId = isset($_POST['table_id']) ? (int)$_POST['table_id'] : 0;
     
@@ -406,6 +407,7 @@ foreach ($tables as $index => $table) {
         <div class="bg-white rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-200">
             <h3 class="text-xl font-serif font-bold text-brand-black mb-4">Add Table</h3>
             <form action="table.php?status=<?php echo htmlspecialchars($tableStatusFilter); ?>" method="POST" class="space-y-4">
+                <?php echo csrfField(); ?>
                 <input type="hidden" name="action" value="add_table">
                 
                 <div>
@@ -460,6 +462,7 @@ foreach ($tables as $index => $table) {
             </div>
 
             <form id="tableStatusForm" action="table.php?status=<?php echo htmlspecialchars($tableStatusFilter); ?>" method="POST" class="grid grid-cols-3 gap-2 mb-5">
+                <?php echo csrfField(); ?>
                 <input type="hidden" name="action" value="update_status">
                 <input type="hidden" name="table_id" id="statusTableId">
                 <button type="submit" name="status" value="available" class="bg-green-50 text-green-700 border border-green-200 py-2.5 rounded-xl text-xs font-bold hover:bg-green-100 transition-colors">Available</button>
@@ -472,6 +475,7 @@ foreach ($tables as $index => $table) {
             </div>
 
             <form id="createOrderForm" action="table.php?status=<?php echo htmlspecialchars($tableStatusFilter); ?>" method="POST" class="space-y-4">
+                <?php echo csrfField(); ?>
                 <input type="hidden" name="action" value="create_order">
                 <input type="hidden" name="table_id" id="modalTableId">
                 
@@ -701,7 +705,7 @@ foreach ($tables as $index => $table) {
             }
         });
     </script>
-    <?php include 'staff_chatbot.php'; ?>
+    <?php include __DIR__ . '/staff_chatbot.php'; ?>
 </body>
 </html>
 

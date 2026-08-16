@@ -1,5 +1,5 @@
 <?php
-require_once 'db.php';
+require_once __DIR__ . '/../db.php';
 
 // Check if user is logged in
 if (!isLoggedIn()) {
@@ -603,6 +603,7 @@ $ticketStats = $stmt->fetch();
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'X-CSRF-Token': '<?php echo csrfToken(); ?>',
                 },
                 body: JSON.stringify({
                     order_id: orderId,
@@ -809,6 +810,6 @@ $ticketStats = $stmt->fetch();
             }
         });
     </script>
-    <?php include 'staff_chatbot.php'; ?>
+    <?php include __DIR__ . '/staff_chatbot.php'; ?>
 </body>
 </html>

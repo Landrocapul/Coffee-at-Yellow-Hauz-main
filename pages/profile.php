@@ -1,5 +1,5 @@
 <?php
-require_once 'db.php';
+require_once __DIR__ . '/../db.php';
 
 if (!isLoggedIn()) {
     redirect('index.php');
@@ -25,6 +25,7 @@ if (!$profileUser || $profileUser['status'] !== 'active') {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    requireCsrfToken();
     $action = $_POST['action'];
 
     if ($action === 'update_profile') {
@@ -59,7 +60,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($currentPassword === '' || $newPassword === '' || $confirmPassword === '') {
                 throw new Exception('Please complete all password fields.');
             }
-            if ($currentPassword !== $profileUser['password']) {
+            if (!password_verify($currentPassword, $profileUser['password'])) {
                 throw new Exception('Current password is incorrect.');
             }
             if (strlen($newPassword) < 6) {
@@ -70,7 +71,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
 
             $stmt = $pdo->prepare("UPDATE users SET password = ? WHERE id = ?");
-            $stmt->execute([$newPassword, $profileUser['id']]);
+            $stmt->execute([password_hash($newPassword, PASSWORD_DEFAULT), $profileUser['id']]);
             profileFlashAndRedirect('success', 'Password changed successfully.');
         } catch (Exception $e) {
             profileFlashAndRedirect('error', 'Failed to change password: ' . $e->getMessage());
@@ -247,6 +248,7 @@ $homeUrl = hasAdminAccess() ? 'menu.php' : 'menu.php';
                                 </div>
                             </div>
                             <form action="profile.php" method="POST" class="space-y-4">
+                                <?php echo csrfField(); ?>
                                 <input type="hidden" name="action" value="update_profile">
                                 <div>
                                     <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Employee ID</label>
@@ -277,6 +279,7 @@ $homeUrl = hasAdminAccess() ? 'menu.php' : 'menu.php';
                                 </div>
                             </div>
                             <form action="profile.php" method="POST" class="space-y-4">
+                                <?php echo csrfField(); ?>
                                 <input type="hidden" name="action" value="change_password">
                                 <div>
                                     <label class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Current Password</label>
@@ -397,6 +400,6 @@ $homeUrl = hasAdminAccess() ? 'menu.php' : 'menu.php';
             }
         });
     </script>
-    <?php include 'staff_chatbot.php'; ?>
+    <?php include __DIR__ . '/staff_chatbot.php'; ?>
 </body>
 </html>

@@ -1,5 +1,5 @@
 <?php
-require_once 'db.php';
+require_once __DIR__ . '/../db.php';
 
 // Set JSON header
 header('Content-Type: application/json');
@@ -16,6 +16,10 @@ $currentUser = getCurrentUser();
 // Get request method and action
 $method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? '';
+
+if ($method === 'POST') {
+    requireCsrfToken();
+}
 
 try {
     switch ($action) {
@@ -53,6 +57,7 @@ try {
 
         case 'update_table_status':
             if ($method === 'POST') {
+                if (!isAdmin()) { http_response_code(403); echo json_encode(['success' => false, 'error' => 'Forbidden']); exit; }
                 $input = json_decode(file_get_contents('php://input'), true);
                 $tableId = (int)$input['table_id'];
                 $status = sanitize($input['status']);
@@ -160,12 +165,29 @@ try {
                     $orderType = sanitize($input['order_type'] ?? 'dine_in');
                     $paymentMethod = sanitize($input['payment_method'] ?? 'cash');
                     $discountPercent = max(0, min(100, (float)($input['discount_percent'] ?? 0)));
-                    $amountReceived = max(0, (float)($input['amount_received'] ?? 0));
+                    if (!in_array($orderType, ['dine_in', 'takeout'], true) || !in_array($paymentMethod, ['cash', 'gcash', 'card'], true)) {
+                        echo json_encode(['success' => false, 'error' => 'Invalid order details']);
+                        exit;
+                    }
                     
                     $orderNumber = generateOrderNumber();
                     $subtotal = 0;
+                    $validatedCart = [];
+                    $itemStmt = $pdo->prepare('SELECT id, price, is_available FROM menu_items WHERE id = ?');
                     foreach ($input['cart'] as $item) {
-                        $subtotal += $item['price'] * $item['quantity'];
+                        $itemId = (int)($item['id'] ?? 0);
+                        $quantity = (int)($item['quantity'] ?? 0);
+                        if ($itemId < 1 || $quantity < 1 || $quantity > 100) {
+                            throw new RuntimeException('Invalid cart item.');
+                        }
+                        $itemStmt->execute([$itemId]);
+                        $databaseItem = $itemStmt->fetch();
+                        if (!$databaseItem || !(int)$databaseItem['is_available']) {
+                            throw new RuntimeException('An item is no longer available.');
+                        }
+                        $price = (float)$databaseItem['price'];
+                        $subtotal += $price * $quantity;
+                        $validatedCart[] = ['id' => $itemId, 'quantity' => $quantity, 'price' => $price];
                     }
                     
                     $taxRate = getSetting('tax_rate') ? (float)getSetting('tax_rate') : 12;
@@ -180,7 +202,7 @@ try {
                     $orderId = $pdo->lastInsertId();
                     
                     // Insert order items (stock already reduced when added to cart)
-                    foreach ($input['cart'] as $item) {
+                    foreach ($validatedCart as $item) {
                         $totalPrice = $item['price'] * $item['quantity'];
                         $stmt = $pdo->prepare("INSERT INTO order_items (order_id, menu_item_id, quantity, unit_price, total_price) VALUES (?, ?, ?, ?, ?)");
                         $stmt->execute([$orderId, $item['id'], $item['quantity'], $item['price'], $totalPrice]);
@@ -194,7 +216,9 @@ try {
                     
                     echo json_encode(['success' => true, 'order_id' => $orderId, 'order_number' => $orderNumber]);
                 } catch (Exception $e) {
-                    echo json_encode(['success' => false, 'error' => 'Database error: ' . $e->getMessage()]);
+                    error_log('Order creation failed: ' . $e->getMessage());
+                    http_response_code(500);
+                    echo json_encode(['success' => false, 'error' => 'Could not create the order.']);
                 }
             }
             break;
@@ -223,7 +247,7 @@ try {
                     exit;
                 }
 
-                require_once __DIR__ . DIRECTORY_SEPARATOR . 'chatbot' . DIRECTORY_SEPARATOR . 'chatbot.php';
+                require_once dirname(__DIR__) . DIRECTORY_SEPARATOR . 'chatbot' . DIRECTORY_SEPARATOR . 'chatbot.php';
                 $botResponse = (new StaffChatbot())->answer($message);
 
                 echo json_encode([
@@ -239,6 +263,7 @@ try {
 
         case 'staff_chatbot_learn':
             if ($method === 'POST') {
+                if (!isAdmin()) { http_response_code(403); echo json_encode(['success' => false, 'error' => 'Forbidden']); exit; }
                 $input = json_decode(file_get_contents('php://input'), true) ?: [];
                 $question = trim((string)($input['question'] ?? ''));
                 $answer = trim((string)($input['answer'] ?? ''));
@@ -254,7 +279,7 @@ try {
                 }
 
                 $learnedBy = $currentUser['username'] ?? $currentUser['full_name'] ?? 'staff';
-                require_once __DIR__ . DIRECTORY_SEPARATOR . 'chatbot' . DIRECTORY_SEPARATOR . 'chatbot.php';
+                require_once dirname(__DIR__) . DIRECTORY_SEPARATOR . 'chatbot' . DIRECTORY_SEPARATOR . 'chatbot.php';
                 try {
                     $learnResponse = (new StaffChatbot())->learn($question, $answer, (string)$learnedBy);
                 } catch (InvalidArgumentException | RuntimeException $e) {
@@ -323,6 +348,7 @@ try {
 
         case 'add_category':
             if ($method === 'POST') {
+                if (!isAdmin()) { http_response_code(403); echo json_encode(['success' => false, 'error' => 'Forbidden']); exit; }
                 $input = json_decode(file_get_contents('php://input'), true);
                 $name = sanitize($input['name']);
                 $icon = sanitize($input['icon']);
@@ -349,6 +375,7 @@ try {
 
         case 'update_category':
             if ($method === 'POST') {
+                if (!isAdmin()) { http_response_code(403); echo json_encode(['success' => false, 'error' => 'Forbidden']); exit; }
                 $input = json_decode(file_get_contents('php://input'), true);
                 $categoryId = (int)$input['id'];
                 $name = sanitize($input['name']);
@@ -371,6 +398,7 @@ try {
 
         case 'delete_category':
             if ($method === 'POST') {
+                if (!isAdmin()) { http_response_code(403); echo json_encode(['success' => false, 'error' => 'Forbidden']); exit; }
                 $input = json_decode(file_get_contents('php://input'), true);
                 $categoryId = (int)$input['id'];
                 
@@ -397,6 +425,8 @@ try {
             break;
     }
 } catch (PDOException $e) {
-    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    error_log('API database error: ' . $e->getMessage());
+    http_response_code(500);
+    echo json_encode(['success' => false, 'error' => 'A database error occurred.']);
 }
 ?>

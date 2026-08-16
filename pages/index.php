@@ -1,5 +1,5 @@
 <?php
-require_once 'db.php';
+require_once __DIR__ . '/../db.php';
 
 // Redirect if already logged in
 if (isLoggedIn()) {
@@ -11,6 +11,7 @@ $success = '';
 
 // Handle login form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    requireCsrfToken();
     $pin = preg_replace('/\D/', '', $_POST['pin'] ?? '');
     $role = sanitize($_POST['role'] ?? 'cashier');
     
@@ -26,11 +27,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $user = null;
 
             foreach ($users as $candidate) {
-                $isExactPin = $pin === $candidate['password'];
-                $isSeededAdminPin = $role === 'admin' && $pin === '1234' && $candidate['employee_id'] === 'ADMIN001' && $candidate['password'] === 'admin123';
-                $isSeededCashierPin = $role === 'cashier' && $pin === '0000' && $candidate['employee_id'] === 'CASHIER001' && $candidate['password'] === 'admin123';
-
-                if ($isExactPin || $isSeededAdminPin || $isSeededCashierPin) {
+                // Supports existing local plaintext PINs once, then upgrades them.
+                $isValid = password_verify($pin, $candidate['password']);
+                if (!$isValid && !str_starts_with($candidate['password'], '$2y$') && hash_equals($candidate['password'], $pin)) {
+                    $isValid = true;
+                    $upgrade = $pdo->prepare('UPDATE users SET password = ? WHERE id = ?');
+                    $upgrade->execute([password_hash($pin, PASSWORD_DEFAULT), $candidate['id']]);
+                }
+                if ($isValid) {
                     $user = $candidate;
                     break;
                 }
@@ -41,6 +45,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $updateStmt = $pdo->prepare("UPDATE users SET last_login = NOW() WHERE id = ?");
                 $updateStmt->execute([$user['id']]);
                 
+                session_regenerate_id(true);
                 // Set session variables
                 $_SESSION['user_id'] = $user['id'];
                 $_SESSION['employee_id'] = $user['employee_id'];
@@ -169,6 +174,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 <!-- FORM -->
                 <form action="index.php" method="POST" class="space-y-6" onsubmit="return validatePin()">
+                    <?php echo csrfField(); ?>
                     
                     <!-- Hidden inputs -->
                     <input type="hidden" id="role-input" name="role" value="cashier">

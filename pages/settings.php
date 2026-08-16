@@ -1,5 +1,5 @@
 <?php
-require_once 'db.php';
+require_once __DIR__ . '/../db.php';
 
 // Check if user is logged in
 if (!isLoggedIn()) {
@@ -24,6 +24,7 @@ function flashAndRedirect($type, $message) {
 
 // Handle settings updates
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    requireCsrfToken();
     $action = $_POST['action'];
     
     if ($action === 'update_settings') {
@@ -116,7 +117,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 throw new Exception('PIN must be 4 to 8 digits.');
             }
             $stmt = $pdo->prepare("INSERT INTO users (employee_id, username, password, full_name, role) VALUES (?, ?, ?, ?, ?)");
-            $stmt->execute([$employeeId, $username, $password, $fullName, $role]);
+            $stmt->execute([$employeeId, $username, password_hash($password, PASSWORD_DEFAULT), $fullName, $role]);
             flashAndRedirect('success', 'User added successfully.');
         } catch (Exception $e) {
             flashAndRedirect('error', 'Failed to add user: ' . $e->getMessage());
@@ -149,7 +150,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
             if ($password !== '') {
                 $stmt = $pdo->prepare("UPDATE users SET employee_id = ?, username = ?, password = ?, full_name = ?, role = ?, status = ? WHERE id = ?");
-                $stmt->execute([$employeeId, $username, $password, $fullName, $role, $status, $userId]);
+                $stmt->execute([$employeeId, $username, password_hash($password, PASSWORD_DEFAULT), $fullName, $role, $status, $userId]);
             } else {
                 $stmt = $pdo->prepare("UPDATE users SET employee_id = ?, username = ?, full_name = ?, role = ?, status = ? WHERE id = ?");
                 $stmt->execute([$employeeId, $username, $fullName, $role, $status, $userId]);
@@ -377,6 +378,7 @@ $settingsUpdatedAt = $stmt->fetch()['updated_at'] ?? null;
                         </div>
                     </div>
                     <form action="settings.php" method="POST" class="space-y-4">
+                        <?php echo csrfField(); ?>
                         <input type="hidden" name="action" value="update_settings">
                         
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -458,6 +460,7 @@ $settingsUpdatedAt = $stmt->fetch()['updated_at'] ?? null;
                     </div>
 
                     <form action="settings.php" method="POST" class="space-y-4">
+                        <?php echo csrfField(); ?>
                         <input type="hidden" name="action" value="update_time_menus">
                         <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
                             <?php foreach ($timeMenus as $index => $timeMenu): ?>
@@ -580,6 +583,7 @@ $settingsUpdatedAt = $stmt->fetch()['updated_at'] ?? null;
                 </div>
             </div>
             <form action="settings.php" method="POST" class="space-y-4">
+                <?php echo csrfField(); ?>
                 <input type="hidden" name="action" value="add_user">
                 
                 <div>
@@ -640,6 +644,7 @@ $settingsUpdatedAt = $stmt->fetch()['updated_at'] ?? null;
                 </button>
             </div>
             <form action="settings.php" method="POST" class="space-y-4">
+                <?php echo csrfField(); ?>
                 <input type="hidden" name="action" value="update_user">
                 <input type="hidden" id="edit_user_id" name="user_id">
                 
@@ -920,6 +925,6 @@ $settingsUpdatedAt = $stmt->fetch()['updated_at'] ?? null;
             }
         });
     </script>
-    <?php include 'staff_chatbot.php'; ?>
+    <?php include __DIR__ . '/staff_chatbot.php'; ?>
 </body>
 </html>

@@ -1,229 +1,66 @@
-﻿<?php
-// Database Configuration
-define('DB_HOST', 'localhost');
-define('DB_NAME', 'yellow_hauz_pos');
-define('DB_USER', 'root');
-define('DB_PASS', '');
-define('DB_CHARSET', 'utf8mb4');
+<?php
+// Compatibility bootstrap for the existing pages. New code should include the
+// smaller files from config/ and includes/ directly.
+require_once __DIR__ . '/config/database.php';
 
-// Create database connection
-try {
-    $dsn = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
-    $options = [
-        PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        PDO::ATTR_EMULATE_PREPARES   => false,
-    ];
-    
-    $pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
-} catch (PDOException $e) {
-    die("Database connection failed: " . $e->getMessage());
-}
-
-// Application timezone for all date/time logic
 if (!defined('APP_TIMEZONE')) {
     define('APP_TIMEZONE', 'Asia/Manila');
 }
 date_default_timezone_set(APP_TIMEZONE);
 
-// Start session if not already started
 if (session_status() === PHP_SESSION_NONE) {
+    session_name('yellow_hauz_session');
+    session_set_cookie_params([
+        'lifetime' => 0,
+        'path' => '/',
+        'secure' => !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off',
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ]);
     session_start();
 }
 
-// Helper function to check if user is logged in
-function isLoggedIn() {
-    return isset($_SESSION['user_id']);
-}
+require_once __DIR__ . '/includes/security.php';
+require_once __DIR__ . '/includes/auth.php';
+sendSecurityHeaders();
 
-// Helper function to check if user is admin
-function isAdmin() {
-    return isset($_SESSION['role']) && $_SESSION['role'] === 'admin';
-}
+function redirect($url) { header('Location: ' . $url); exit(); }
+function sanitize($data) { return trim(strip_tags((string)$data)); }
+function formatCurrency($amount) { return "\u{20B1}" . number_format($amount, 2); }
+function generateOrderNumber() { return 'ORD-' . date('Ymd') . '-' . bin2hex(random_bytes(4)); }
 
-// Helper function to redirect
-function redirect($url) {
-    header("Location: $url");
-    exit();
-}
-
-// Helper function to sanitize input
-function sanitize($data) {
-    return htmlspecialchars(strip_tags(trim($data)));
-}
-
-// Helper function to format currency
-function formatCurrency($amount) {
-    return "\u{20B1}" . number_format($amount, 2);
-}
-
-// Helper function to generate order number
-function generateOrderNumber() {
-    return 'ORD-' . date('Ymd') . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
-}
-
-// Helper function to get current user
 function getCurrentUser() {
     global $pdo;
-    if (!isLoggedIn()) {
-        return null;
-    }
-    
-    $stmt = $pdo->prepare("SELECT id, employee_id, username, full_name, role FROM users WHERE id = ?");
+    if (!isLoggedIn()) return null;
+    $stmt = $pdo->prepare('SELECT id, employee_id, username, full_name, role FROM users WHERE id = ? AND status = \'active\'');
     $stmt->execute([$_SESSION['user_id']]);
     return $stmt->fetch();
 }
-
-// Helper function to get setting value
 function getSetting($key) {
     global $pdo;
-    $stmt = $pdo->prepare("SELECT setting_value FROM settings WHERE setting_key = ?");
+    $stmt = $pdo->prepare('SELECT setting_value FROM settings WHERE setting_key = ?');
     $stmt->execute([$key]);
     $result = $stmt->fetch();
     return $result ? $result['setting_value'] : null;
 }
-
-// Helper function to update setting
 function updateSetting($key, $value) {
     global $pdo;
-    $stmt = $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = ?");
+    $stmt = $pdo->prepare('INSERT INTO settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = ?');
     return $stmt->execute([$key, $value, $value]);
 }
 
 function getDefaultTimeMenus() {
     return [
-        [
-            'title' => 'Morning Menu',
-            'time' => 'Opening - 11:00 AM',
-            'focus' => 'Heavy breakfast sales, premium coffee pairings, and quick pastries.',
-            'start' => '00:00',
-            'end' => '11:00',
-            'item_names' => [
-                'Chicken Tocino',
-                'Hungarian Sausage',
-                'Longganisa',
-                'Homemade Corned Beef',
-                'Fried Bangus',
-                'Waffles',
-                'Nutella Waffles',
-                'Spanish Latte',
-                'Latte',
-                'Americano Hot',
-                'Matcha Latte',
-                'YH Dark Chocolate',
-            ],
-            'items' => [
-                'Featured Breakfasts: Chicken Tocino, Hungarian Sausage, Longganisa, Homemade Corned Beef, and Fried Bangus with eggs and rice.',
-                'Sweet Starts: Waffles, Nutella Waffles, and Cakes/Pastries.',
-                'Primary Drinks: Hot Coffee and Hot Drinks.',
-            ],
-        ],
-        [
-            'title' => 'Lunch & Afternoon Menu',
-            'time' => '11:00 AM - 5:00 PM',
-            'focus' => 'Savory meals, light bites for remote workers, and refreshing cold drinks.',
-            'start' => '11:00',
-            'end' => '17:00',
-            'item_names' => [
-                'Rosemary Porkchop',
-                'Chicken Pesto',
-                'Lamb Adobo Flakes',
-                'Pork Adobo Flakes',
-                'Papa Carlos Butifarra',
-                'Marinated Tofu',
-                'Mango Kani Salad',
-                'Tuna Salad',
-                'Spaghetti Bolognese',
-                'Tuna & Garlic Pasta',
-                'Club Sandwich',
-                'Tuna Melt Sandwich',
-                'Iced Latte',
-                'Iced Kadayawan',
-                'Calamansi',
-                'Cucumber Lemonade',
-            ],
-            'items' => [
-                'Mid-day Meals: Rosemary Porkchop, Chicken Pesto, Lamb Adobo Flakes, Pork Adobo Flakes, Papa Carlos Butifarra, and Marinated Tofu.',
-                'Lighter Lunch: Salads, Pastas, and Sandwiches.',
-                'Beat-the-Heat Drinks: On The Rocks, Blended Coffee, Refreshers, Milkshakes, and Milk Tea.',
-            ],
-        ],
-        [
-            'title' => 'Sundown & Dinner Menu',
-            'time' => '5:00 PM - Closing',
-            'focus' => 'Shared plates, comfort food, groups, and casual evening drinking.',
-            'start' => '17:00',
-            'end' => '23:59',
-            'item_names' => [
-                'Yellow Hauz Special Pizza',
-                'Chili Chorizo Pizza',
-                'Spicy Sardines Pizza',
-                'Three Cheese Pizza',
-                'Chicken Waffles',
-                'Pica Platter',
-                'Hungarian Sausage w/ fries',
-                'Kamote Fries',
-                'Potato Wedges',
-                'Rosemary Porkchop',
-                'Papa Carlos Butifarra',
-                'Fried Bangus',
-                'Affogato',
-                'San Miguel Pilsen',
-                'Iced YH Mocha',
-            ],
-            'items' => [
-                'Group Sharing: Pizzas, Chicken Waffles, Pica Platter, Hungarian w/ fries, Kamote Fries, and Potato Wedges.',
-                'Dinner Entrees: Rosemary Porkchop, Papa Carlos Butifarra, and Fried Bangus.',
-                'Night Cap Drinks: Affogato, San Miguel Pilsen, and premium iced coffee options.',
-            ],
-        ],
+        ['title' => 'Morning Menu', 'time' => 'Opening - 11:00 AM', 'focus' => 'Breakfast and coffee.', 'start' => '00:00', 'end' => '11:00', 'item_names' => [], 'items' => []],
+        ['title' => 'Lunch & Afternoon Menu', 'time' => '11:00 AM - 5:00 PM', 'focus' => 'Meals and cold drinks.', 'start' => '11:00', 'end' => '17:00', 'item_names' => [], 'items' => []],
+        ['title' => 'Sundown & Dinner Menu', 'time' => '5:00 PM - Closing', 'focus' => 'Dinner and shared plates.', 'start' => '17:00', 'end' => '23:59', 'item_names' => [], 'items' => []],
     ];
 }
-
 function getTimeMenus() {
     $stored = getSetting('time_based_menus');
-    if (!$stored) {
-        return getDefaultTimeMenus();
-    }
-
-    $decoded = json_decode($stored, true);
-    if (!is_array($decoded)) {
-        return getDefaultTimeMenus();
-    }
-
-    $defaultsByTitle = [];
-    foreach (getDefaultTimeMenus() as $defaultMenu) {
-        $defaultsByTitle[$defaultMenu['title']] = $defaultMenu;
-    }
-
-    foreach ($decoded as &$menu) {
-        $defaultMenu = $defaultsByTitle[$menu['title'] ?? ''] ?? null;
-        if ($defaultMenu) {
-            $menu['start'] = $menu['start'] ?? $defaultMenu['start'];
-            $menu['end'] = $menu['end'] ?? $defaultMenu['end'];
-            $menu['item_names'] = $menu['item_names'] ?? $defaultMenu['item_names'];
-        }
-    }
-    unset($menu);
-
-    return $decoded;
+    $decoded = $stored ? json_decode($stored, true) : null;
+    return is_array($decoded) ? $decoded : getDefaultTimeMenus();
 }
-
-// Helper function to check if user is cashier
-function isCashier() {
-    $currentUser = getCurrentUser();
-    return $currentUser && $currentUser['role'] === 'cashier';
-}
-
-// Helper function to check if user has access to admin features
-function hasAdminAccess() {
-    return isAdmin();
-}
-
-// Helper function to check if user has access to cashier features
-function hasCashierAccess() {
-    return isAdmin() || isCashier();
-}
-?>
-
-
+function isCashier() { $user = getCurrentUser(); return $user && $user['role'] === 'cashier'; }
+function hasAdminAccess() { return isAdmin(); }
+function hasCashierAccess() { return isAdmin() || isCashier(); }
