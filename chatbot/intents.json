@@ -38,9 +38,9 @@
     },
     {
       "tag": "cash_change",
-      "patterns": ["calculate change", "cash change", "amount received", "customer gave cash", "enter cash amount"],
+      "patterns": ["calculate change", "cash change", "amount received", "customer gave cash", "enter cash amount", "amount received topic", "how to enter amount received"],
       "keywords": ["change", "cash", "amount", "received", "tendered", "money", "gave"],
-      "response": "For cash payments, enter the amount received in the payment screen. The system compares it with the total and shows the change before you complete the order."
+      "response": "Amount received steps:\n1. Open the bill or payment section.\n2. Choose Cash as payment method.\n3. Enter the exact amount received from customer.\n4. Check the computed change.\n5. Complete order only when total and change are correct."
     },
     {
       "tag": "discounts",
@@ -61,6 +61,18 @@
       "response": "Table Services steps 🪑:\n1. Open Table Services from the sidebar.\n2. Use status and area filters to find a table.\n3. Check table card status (Available, Occupied, Reserved, Cleaning).\n4. Assign available tables during Dine In checkout."
     },
     {
+      "tag": "reserve_table_tutorial",
+      "patterns": ["how to reserve a table", "reserve a table", "set table as reserved", "mark table reserved", "table reservation tutorial"],
+      "keywords": ["reserve", "reserved", "table", "tutorial", "mark", "status"],
+      "response": "How to reserve a table:\n1. Open Table Services.\n2. Click the table card you want.\n3. In Table Details, click Reserved.\n4. The table status updates to Reserved."
+    },
+    {
+      "tag": "add_table_tutorial",
+      "patterns": ["how to add a table", "add a table", "new table setup", "create table", "add table tutorial"],
+      "keywords": ["add", "new", "table", "create", "setup", "chairs", "area"],
+      "response": "How to add a table:\n1. Open Table Services.\n2. Click the + button on the top right.\n3. Enter table number, number of chairs, and area.\n4. Click Add Table to save."
+    },
+    {
       "tag": "release_table",
       "patterns": ["free table", "release table", "table still occupied", "make table available", "clear occupied table"],
       "keywords": ["free", "release", "available", "occupied", "clear", "table"],
@@ -71,6 +83,18 @@
       "patterns": ["view tickets", "active tickets", "order ticket", "ticket list", "find order status"],
       "keywords": ["ticket", "tickets", "active", "status", "order", "queue", "processing"],
       "response": "Tickets steps 🎟️:\n1. Open Tickets from sidebar.\n2. Use filters/search to find an order.\n3. Open ticket details.\n4. Choose action: Print, Complete, or Cancel."
+    },
+    {
+      "tag": "ticket_parts",
+      "patterns": ["ticket parts", "parts of ticket", "what are ticket parts", "explain ticket details", "ticket breakdown"],
+      "keywords": ["ticket", "parts", "details", "breakdown", "order"],
+      "response": "A ticket usually has these parts: header (order number, customer, table/order type, time), items list (item names, quantities, line totals), totals (subtotal, tax, total), payment method, status, and action buttons like Print/Start/Complete/Cancel."
+    },
+    {
+      "tag": "order_panel_controls",
+      "patterns": ["order panel controls", "clear all in order panel", "add subtract item quantity", "delete item in order panel", "how to edit cart quickly"],
+      "keywords": ["order", "panel", "clear", "add", "subtract", "minus", "plus", "delete", "cart"],
+      "response": "In the order panel: use Clear All to remove all items in one action, use + and - to quickly increase or decrease quantity per item, and use the trash icon to delete a single item. These controls help fix orders fast before checkout."
     },
     {
       "tag": "complete_ticket",
@@ -88,7 +112,7 @@
       "tag": "stock",
       "patterns": ["check stock", "inventory", "item quantity", "stock count", "available stock", "how many left"],
       "keywords": ["stock", "inventory", "quantity", "count", "left", "available", "items"],
-      "response": "Admins can check inventory in Manage Food Items. Cashiers can also watch Menu stock warnings and avoid selling items marked unavailable or out of stock."
+      "response": "To add a new item (Admin):\n1. Open Manage Food Items.\n2. Click Add Item.\n3. Enter item name, category, price, and starting quantity.\n4. Add image and description if needed.\n5. Set item as Available.\n6. Save, then confirm the new item appears in the list."
     },
     {
       "tag": "low_stock",
@@ -124,7 +148,19 @@
       "tag": "recommendations",
       "patterns": ["recommend item", "slow moving item", "suggest item", "what should I recommend", "upsell"],
       "keywords": ["recommend", "suggest", "upsell", "slow", "moving", "sell", "promote"],
-      "response": "Use the recommendation button on Menu to see items with enough stock that may need promotion. Suggest those items to customers when they fit the order."
+      "response": "Recommended items are suggested products the system highlights to help staff upsell safely. They are usually items with good stock and strong sales potential. Use them to suggest add-ons or alternatives that match the customer's order."
+    },
+    {
+      "tag": "recommended_items_topic",
+      "patterns": ["recommended items", "what are recommended items", "why recommended items", "recommended items topic"],
+      "keywords": ["recommended", "recommend", "suggested", "upsell"],
+      "response": "Recommended items are suggestions from the POS to help staff offer the best add-ons or alternatives. They are meant to improve customer choices and increase sales while focusing on items that are good to promote."
+    },
+    {
+      "tag": "time_based_menu",
+      "patterns": ["time-based menu", "time based menu", "what is time-based menu", "time menu", "featured now menu"],
+      "keywords": ["time", "menu", "featured", "schedule", "panel"],
+      "response": "The Time-based Menu shows featured items for the current time period, so staff can quickly suggest relevant products. It helps speed up ordering and highlights items that are best promoted right now."
     },
     {
       "tag": "sales_report",
@@ -146,9 +182,9 @@
     },
     {
       "tag": "users",
-      "patterns": ["add staff", "manage users", "add cashier", "deactivate user", "admin account", "cashier account"],
+      "patterns": ["add staff", "manage users", "add cashier", "deactivate user", "admin account", "cashier account", "add new user", "how to add new user"],
       "keywords": ["user", "staff", "cashier", "admin", "account", "deactivate", "employee"],
-      "response": "User management steps (Admin):\n1. Open Settings.\n2. Go to user/staff management section.\n3. Add or edit user details and role.\n4. Save updates.\n5. Deactivate accounts that should no longer access POS."
+      "response": "Add new user steps (Admin):\n1. Open Settings.\n2. Go to the Users section.\n3. Click Add User.\n4. Enter employee ID, username, PIN, and full name.\n5. Choose Admin or Cashier role.\n6. Save, then confirm the new account appears in the user list."
     },
     {
       "tag": "profile_password",

@@ -77,6 +77,63 @@ The system comes with two default users:
 
 ## Usage
 
+### Quick Tutorial: Table Actions
+
+#### How to Reserve a Table
+
+1. Log in with a `Cashier` or `Admin` account.
+2. Open `Table Services` from the left sidebar.
+3. Find the table you want to reserve.
+4. Change the table status to `Reserved`.
+5. Confirm the update. The table will now appear as reserved.
+
+#### How to Add a Table
+
+1. Log in with a `Cashier` or `Admin` account.
+2. Open `Table Services`.
+3. Click `Add Table`.
+4. Enter the `Table Number`.
+5. Set the `Capacity` and choose the `Area` (`Normal` or `Airconditioned`).
+6. Save to create the new table. It will be added with `Available` status.
+
+### Quick Tutorial: Table Actions
+
+#### How to Reserve a Table
+
+1. Log in with a `Cashier` or `Admin` account.
+2. Open `Table Services` from the left sidebar.
+3. Find the table you want to reserve.
+4. Change the table status to `Reserved`.
+5. Confirm the update. The table will now appear as reserved.
+
+#### How to Add a Table
+
+1. Log in with a `Cashier` or `Admin` account.
+2. Open `Table Services`.
+3. Click `Add Table`.
+4. Enter the `Table Number`.
+5. Set the `Capacity` and choose the `Area` (`Normal` or `Airconditioned`).
+6. Save to create the new table. It will be added with `Available` status.
+
+### Quick Tutorial: Table Actions
+
+#### How to Reserve a Table
+
+1. Log in with a `Cashier` or `Admin` account.
+2. Open `Table Services` from the left sidebar.
+3. Find the table you want to reserve.
+4. Change the table status to `Reserved`.
+5. Confirm the update. The table will now appear as reserved.
+
+#### How to Add a Table
+
+1. Log in with a `Cashier` or `Admin` account.
+2. Open `Table Services`.
+3. Click `Add Table`.
+4. Enter the `Table Number`.
+5. Set the `Capacity` and choose the `Area` (`Normal` or `Airconditioned`).
+6. Save to create the new table. It will be added with `Available` status.
+
 ### For Cashiers
 
 1. **Login**: Use your credentials to access the system
