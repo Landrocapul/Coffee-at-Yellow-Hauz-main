@@ -41,6 +41,13 @@ function salesUrl(array $overrides = []) {
     return 'sales.php' . (empty($params) ? '' : '?' . http_build_query($params));
 }
 
+function reportDateInput($value, $fallback) {
+    if (!is_string($value) || !preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $value, $parts) || !checkdate((int)$parts[2], (int)$parts[3], (int)$parts[1])) {
+        return $fallback;
+    }
+    return $value;
+}
+
 // Get date filter
 $dateFilter = $_GET['date_filter'] ?? 'today';
 $chartView = $_GET['chart_view'] ?? 'auto';
@@ -85,6 +92,17 @@ switch ($dateFilter) {
 $periodSeconds = max(1, strtotime($endDate) - strtotime($startDate) + 1);
 $previousStartDate = date('Y-m-d H:i:s', strtotime($startDate) - $periodSeconds);
 $previousEndDate = date('Y-m-d H:i:s', strtotime($startDate) - 1);
+
+// The detailed ledger can use its own calendar range without changing the
+// summary cards and charts above it.
+$transactionStartInput = reportDateInput($_GET['transaction_start_date'] ?? null, date('Y-m-d', strtotime($startDate)));
+$transactionEndInput = reportDateInput($_GET['transaction_end_date'] ?? null, date('Y-m-d', strtotime($endDate)));
+$transactionStartDate = date('Y-m-d 00:00:00', strtotime($transactionStartInput));
+$transactionEndDate = date('Y-m-d 23:59:59', strtotime($transactionEndInput));
+if ($transactionStartDate > $transactionEndDate) {
+    [$transactionStartDate, $transactionEndDate] = [$transactionEndDate, $transactionStartDate];
+    [$transactionStartInput, $transactionEndInput] = [$transactionEndInput, $transactionStartInput];
+}
 
 if (isset($_GET['export']) && $_GET['export'] === 'csv') {
     $stmt = $pdo->prepare("SELECT o.order_number, o.created_at, o.order_type, COALESCE(t.table_number, '') as table_number, o.payment_method, u.full_name as cashier_name, o.subtotal, o.discount_amount, o.tax_amount, o.total_amount,
@@ -261,7 +279,7 @@ $topProducts = $stmt->fetchAll();
 
 // Get detailed transactions
 $transactionWhere = ["o.status = 'completed'", "o.created_at BETWEEN ? AND ?"];
-$transactionParams = [$startDate, $endDate];
+$transactionParams = [$transactionStartDate, $transactionEndDate];
 if ($transactionSearch !== '') {
     $transactionWhere[] = "(o.order_number LIKE ? OR u.full_name LIKE ? OR o.customer_name LIKE ?)";
     $like = '%' . $transactionSearch . '%';
@@ -699,6 +717,13 @@ $transactions = $stmt->fetchAll();
                             <input type="hidden" name="start_date" value="<?php echo htmlspecialchars(date('Y-m-d', strtotime($startDate))); ?>">
                             <input type="hidden" name="end_date" value="<?php echo htmlspecialchars(date('Y-m-d', strtotime($endDate))); ?>">
                             <?php endif; ?>
+                            <div class="flex items-center gap-1.5">
+                                <label for="transactionStartDate" class="sr-only">Transaction start date</label>
+                                <input id="transactionStartDate" type="date" name="transaction_start_date" value="<?php echo htmlspecialchars($transactionStartInput); ?>" aria-label="Transaction start date" class="bg-white border border-gray-200 h-9 rounded-md px-2 text-sm text-gray-600 focus:outline-none focus:ring-1 focus:ring-brand" title="Transaction start date">
+                                <span class="text-xs text-gray-400 font-semibold">to</span>
+                                <label for="transactionEndDate" class="sr-only">Transaction end date</label>
+                                <input id="transactionEndDate" type="date" name="transaction_end_date" value="<?php echo htmlspecialchars($transactionEndInput); ?>" aria-label="Transaction end date" class="bg-white border border-gray-200 h-9 rounded-md px-2 text-sm text-gray-600 focus:outline-none focus:ring-1 focus:ring-brand" title="Transaction end date">
+                            </div>
                             <div class="relative w-full sm:w-64">
                                 <i class="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm"></i>
                                 <input type="text" name="search" value="<?php echo htmlspecialchars($transactionSearch); ?>" placeholder="Search order, cashier, customer..." class="w-full bg-white h-9 rounded-md pl-9 pr-3 text-sm focus:outline-none focus:ring-1 focus:ring-brand border border-gray-200 shadow-sm">

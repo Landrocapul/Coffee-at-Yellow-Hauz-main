@@ -301,7 +301,7 @@ try {
                 $orderId = (int)$input['order_id'];
                 $status = sanitize($input['status']);
 
-                $allowedStatuses = ['pending', 'processing', 'completed', 'cancelled'];
+                $allowedStatuses = ['pending', 'processing', 'completed'];
                 if (!in_array($status, $allowedStatuses, true)) {
                     echo json_encode(['success' => false, 'error' => 'Invalid order status']);
                     exit;
@@ -315,6 +315,53 @@ try {
                     $stmt->execute([$orderId]);
                 }
                 
+                echo json_encode(['success' => true]);
+            }
+            break;
+
+        case 'void_ticket':
+            if ($method === 'POST') {
+                $input = json_decode(file_get_contents('php://input'), true);
+                $orderId = (int)($input['order_id'] ?? 0);
+                $adminPin = preg_replace('/\D/', '', (string)($input['admin_pin'] ?? ''));
+
+                if ($orderId <= 0 || $adminPin === '') {
+                    echo json_encode(['success' => false, 'error' => 'An order and administrator PIN are required.']);
+                    exit;
+                }
+
+                $stmt = $pdo->prepare("SELECT password FROM users WHERE role = 'admin' AND status = 'active'");
+                $stmt->execute();
+                $approved = false;
+                foreach ($stmt->fetchAll() as $admin) {
+                    $storedPin = (string)$admin['password'];
+                    if (password_verify($adminPin, $storedPin) || (!str_starts_with($storedPin, '$2y$') && hash_equals($storedPin, $adminPin))) {
+                        $approved = true;
+                        break;
+                    }
+                }
+                if (!$approved) {
+                    http_response_code(403);
+                    echo json_encode(['success' => false, 'error' => 'Administrator PIN was not approved.']);
+                    exit;
+                }
+
+                $pdo->beginTransaction();
+                $stmt = $pdo->prepare('SELECT status FROM orders WHERE id = ? FOR UPDATE');
+                $stmt->execute([$orderId]);
+                $order = $stmt->fetch();
+                if (!$order || $order['status'] === 'cancelled') {
+                    $pdo->rollBack();
+                    echo json_encode(['success' => false, 'error' => 'This ticket cannot be voided.']);
+                    exit;
+                }
+
+                $stmt = $pdo->prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?");
+                $stmt->execute([$orderId]);
+                $stmt = $pdo->prepare("UPDATE tables SET status = 'available', current_order_id = NULL WHERE current_order_id = ?");
+                $stmt->execute([$orderId]);
+                $pdo->commit();
+
                 echo json_encode(['success' => true]);
             }
             break;

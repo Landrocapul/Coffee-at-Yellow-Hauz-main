@@ -17,7 +17,7 @@ $currentUser = getCurrentUser();
 function ticketUrl(array $overrides = []) {
     $params = array_merge($_GET, $overrides);
     foreach ($params as $key => $value) {
-        if ($value === '' || $value === null || ($key === 'filter' && $value === 'active')) {
+        if ($value === '' || $value === null) {
             unset($params[$key]);
         }
     }
@@ -41,25 +41,39 @@ function ticketOrderTypeLabel($type) {
     return $type === 'dine_in' ? 'Dine In' : ($type === 'take_away' ? 'Take Out' : 'Delivery');
 }
 
-$allowedTicketFilters = ['active', 'pending', 'processing', 'completed', 'cancelled', 'today', 'all'];
-$ticketFilter = $_GET['filter'] ?? ($_SESSION['ticket_filter'] ?? 'active');
+function ticketDateInput($value, $fallback) {
+    if (!is_string($value) || !preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $value, $parts) || !checkdate((int)$parts[2], (int)$parts[3], (int)$parts[1])) {
+        return $fallback;
+    }
+    return $value;
+}
+
+$allowedTicketFilters = ['processing', 'today', 'completed', 'cancelled', 'custom'];
+$ticketFilter = $_GET['filter'] ?? ($_SESSION['ticket_filter'] ?? 'today');
 if (!in_array($ticketFilter, $allowedTicketFilters, true)) {
-    $ticketFilter = 'active';
+    $ticketFilter = 'today';
 }
 $_SESSION['ticket_filter'] = $ticketFilter;
 $ticketSearch = sanitize($_GET['search'] ?? '');
+$ticketStartDate = ticketDateInput($_GET['start_date'] ?? null, date('Y-m-d'));
+$ticketEndDate = ticketDateInput($_GET['end_date'] ?? null, date('Y-m-d'));
+if ($ticketStartDate > $ticketEndDate) {
+    [$ticketStartDate, $ticketEndDate] = [$ticketEndDate, $ticketStartDate];
+}
 $activeTabClass = 'px-3 py-1.5 rounded-md bg-brand-light text-brand-dark font-bold border border-brand/20 shadow-sm transition-all';
 $inactiveTabClass = 'px-3 py-1.5 rounded-md text-gray-500 hover:text-brand-black font-semibold transition-all';
 
 $where = [];
 $params = [];
-if ($ticketFilter === 'active') {
-    $where[] = "o.status IN ('pending', 'processing')";
-} elseif (in_array($ticketFilter, ['pending', 'processing', 'completed', 'cancelled'], true)) {
+if (in_array($ticketFilter, ['processing', 'completed', 'cancelled'], true)) {
     $where[] = 'o.status = ?';
     $params[] = $ticketFilter;
 } elseif ($ticketFilter === 'today') {
     $where[] = 'DATE(o.created_at) = CURDATE()';
+} elseif ($ticketFilter === 'custom') {
+    $where[] = 'o.created_at BETWEEN ? AND ?';
+    $params[] = $ticketStartDate . ' 00:00:00';
+    $params[] = $ticketEndDate . ' 23:59:59';
 }
 if ($ticketSearch !== '') {
     $where[] = '(o.order_number LIKE ? OR o.customer_name LIKE ? OR t.table_number LIKE ? OR u.full_name LIKE ?)';
@@ -94,7 +108,6 @@ if (!empty($tickets)) {
 }
 
 $stmt = $pdo->query("SELECT
-                    SUM(status = 'pending') as pending_count,
                     SUM(status = 'processing') as processing_count,
                     SUM(status = 'completed' AND DATE(created_at) = CURDATE()) as completed_today_count,
                     SUM(status = 'cancelled' AND DATE(created_at) = CURDATE()) as cancelled_today_count,
@@ -196,8 +209,8 @@ $ticketStats = $stmt->fetch();
             <!-- Bottom Users / Logout -->
             <div class="space-y-4">
                 <div class="space-y-3 px-2">
-                    <a href="profile.php" class="flex items-center gap-3 cursor-pointer p-2 rounded-xl hover:bg-gray-100">
-                        <div class="w-8 h-8 rounded-full bg-brand text-brand-black flex items-center justify-center text-xs font-bold relative">
+                    <a id="sidebarProfileLink" href="profile.php" class="flex items-center gap-3 cursor-pointer p-2 rounded-xl hover:bg-gray-100">
+                        <div class="w-8 h-8 shrink-0 rounded-full bg-brand text-brand-black flex items-center justify-center text-xs font-bold relative">
                             <?php echo strtoupper(substr($currentUser['full_name'], 0, 2)); ?>
                             <span class="absolute top-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-white rounded-full"></span>
                         </div>
@@ -222,6 +235,15 @@ $ticketStats = $stmt->fetch();
                 
                 <form method="GET" action="ticket.php" class="flex flex-wrap items-center justify-end gap-3">
                     <input type="hidden" name="filter" value="<?php echo htmlspecialchars($ticketFilter); ?>">
+                    <?php if ($ticketFilter === 'custom'): ?>
+                    <div class="flex items-center gap-1.5">
+                        <label for="ticketStartDate" class="sr-only">Ticket start date</label>
+                        <input id="ticketStartDate" type="date" name="start_date" value="<?php echo htmlspecialchars($ticketStartDate); ?>" aria-label="Ticket start date" class="bg-white border border-gray-200 h-10 rounded-xl px-2 text-sm text-gray-600 focus:outline-none focus:ring-2 focus:ring-brand shadow-sm">
+                        <span class="text-xs text-gray-400 font-semibold">to</span>
+                        <label for="ticketEndDate" class="sr-only">Ticket end date</label>
+                        <input id="ticketEndDate" type="date" name="end_date" value="<?php echo htmlspecialchars($ticketEndDate); ?>" aria-label="Ticket end date" class="bg-white border border-gray-200 h-10 rounded-xl px-2 text-sm text-gray-600 focus:outline-none focus:ring-2 focus:ring-brand shadow-sm">
+                    </div>
+                    <?php endif; ?>
                     <div class="relative">
                         <i class="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm"></i>
                         <input type="text" name="search" value="<?php echo htmlspecialchars($ticketSearch); ?>" placeholder="Search tickets..." class="w-[240px] bg-white h-10 rounded-xl pl-9 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-brand shadow-sm border border-gray-200">
@@ -241,11 +263,7 @@ $ticketStats = $stmt->fetch();
             </header>
 
             <div class="flex-1 min-w-0 overflow-y-auto px-8 pb-8 pt-6">
-                <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-                    <a href="<?php echo ticketUrl(['filter' => 'pending']); ?>" class="bg-white rounded-2xl border <?php echo $ticketFilter === 'pending' ? 'border-brand' : 'border-gray-200'; ?> p-4 shadow-sm">
-                        <p class="text-xs text-gray-500 font-bold uppercase tracking-wider">Pending</p>
-                        <p class="font-serif text-3xl font-bold text-brand-black mt-1"><?php echo (int)$ticketStats['pending_count']; ?></p>
-                    </a>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                     <a href="<?php echo ticketUrl(['filter' => 'processing']); ?>" class="bg-white rounded-2xl border <?php echo $ticketFilter === 'processing' ? 'border-brand' : 'border-gray-200'; ?> p-4 shadow-sm">
                         <p class="text-xs text-gray-500 font-bold uppercase tracking-wider">Processing</p>
                         <p class="font-serif text-3xl font-bold text-brand-black mt-1"><?php echo (int)$ticketStats['processing_count']; ?></p>
@@ -262,13 +280,11 @@ $ticketStats = $stmt->fetch();
 
                 <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
                     <div class="flex items-center bg-white border border-gray-200 rounded-xl p-1 shadow-sm text-sm overflow-x-auto">
-                        <a href="<?php echo ticketUrl(['filter' => 'active']); ?>" class="<?php echo $ticketFilter === 'active' ? $activeTabClass : $inactiveTabClass; ?>">Active</a>
-                        <a href="<?php echo ticketUrl(['filter' => 'pending']); ?>" class="<?php echo $ticketFilter === 'pending' ? $activeTabClass : $inactiveTabClass; ?>">Pending</a>
                         <a href="<?php echo ticketUrl(['filter' => 'processing']); ?>" class="<?php echo $ticketFilter === 'processing' ? $activeTabClass : $inactiveTabClass; ?>">Processing</a>
+                        <a href="<?php echo ticketUrl(['filter' => 'today']); ?>" class="<?php echo $ticketFilter === 'today' ? $activeTabClass : $inactiveTabClass; ?>">Today</a>
                         <a href="<?php echo ticketUrl(['filter' => 'completed']); ?>" class="<?php echo $ticketFilter === 'completed' ? $activeTabClass : $inactiveTabClass; ?>">Completed</a>
                         <a href="<?php echo ticketUrl(['filter' => 'cancelled']); ?>" class="<?php echo $ticketFilter === 'cancelled' ? $activeTabClass : $inactiveTabClass; ?>">Cancelled</a>
-                        <a href="<?php echo ticketUrl(['filter' => 'today']); ?>" class="<?php echo $ticketFilter === 'today' ? $activeTabClass : $inactiveTabClass; ?>">Today</a>
-                        <a href="<?php echo ticketUrl(['filter' => 'all']); ?>" class="<?php echo $ticketFilter === 'all' ? $activeTabClass : $inactiveTabClass; ?>">All</a>
+                        <a href="<?php echo ticketUrl(['filter' => 'custom']); ?>" class="<?php echo $ticketFilter === 'custom' ? $activeTabClass : $inactiveTabClass; ?>"><i class="fa-regular fa-calendar mr-1"></i>Custom</a>
                     </div>
                     <p class="text-xs text-gray-500 font-bold uppercase tracking-wider"><?php echo count($tickets); ?> ticket(s)</p>
                 </div>
@@ -340,7 +356,7 @@ $ticketStats = $stmt->fetch();
                                 <?php endif; ?>
                                 <?php if ($status === 'pending' || $status === 'processing'): ?>
                                 <button onclick="confirmStatusChange(<?php echo (int)$ticket['id']; ?>, 'completed')" class="px-3 py-2 bg-brand-black text-brand rounded-xl text-xs font-bold hover:bg-gray-800 transition-colors">Complete</button>
-                                <button onclick="confirmStatusChange(<?php echo (int)$ticket['id']; ?>, 'cancelled')" class="px-3 py-2 bg-red-50 text-red-600 border border-red-200 rounded-xl text-xs font-bold hover:bg-red-600 hover:text-white transition-colors">Cancel</button>
+                                <button onclick="showVoidApproval(<?php echo (int)$ticket['id']; ?>)" class="px-3 py-2 bg-red-50 text-red-600 border border-red-200 rounded-xl text-xs font-bold hover:bg-red-600 hover:text-white transition-colors">Void</button>
                                 <?php endif; ?>
                             </div>
                         </div>
@@ -368,6 +384,22 @@ $ticketStats = $stmt->fetch();
                 <a href="logout.php" class="flex-1 bg-red-600 text-white py-3 rounded-xl font-bold hover:bg-red-700 transition-colors text-center">
                     Logout
                 </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Administrator approval for ticket voids -->
+    <div id="voidApprovalModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[70] hidden">
+        <div class="bg-white rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl border border-gray-200">
+            <div class="w-14 h-14 bg-red-50 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4"><i class="fa-solid fa-ban text-2xl"></i></div>
+            <h3 class="text-xl font-serif font-bold text-brand-black text-center mb-2">Void ticket approval</h3>
+            <p class="text-sm text-gray-600 text-center mb-5">An active administrator must enter their PIN to void this ticket.</p>
+            <label for="voidAdminPin" class="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Administrator PIN</label>
+            <input id="voidAdminPin" type="password" inputmode="numeric" autocomplete="one-time-code" maxlength="12" class="w-full border border-gray-200 rounded-xl px-4 py-3 text-center tracking-[0.35em] text-lg focus:outline-none focus:ring-2 focus:ring-brand" placeholder="••••">
+            <p id="voidApprovalError" class="hidden text-sm text-red-600 mt-2"></p>
+            <div class="flex gap-3 pt-5">
+                <button type="button" onclick="hideVoidApproval()" class="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition-colors">Cancel</button>
+                <button id="voidApprovalButton" type="button" class="flex-1 bg-red-600 text-white py-3 rounded-xl font-bold hover:bg-red-700 transition-colors">Void Ticket</button>
             </div>
         </div>
     </div>
@@ -430,7 +462,7 @@ $ticketStats = $stmt->fetch();
                     Complete
                 </button>
                 <button id="ticketDetailsCancelButton" type="button" class="flex-1 min-w-[120px] bg-red-50 text-red-600 border border-red-200 py-3 rounded-xl font-bold hover:bg-red-600 hover:text-white transition-colors hidden">
-                    Cancel
+                    Void
                 </button>
             </div>
         </div>
@@ -499,6 +531,65 @@ $ticketStats = $stmt->fetch();
         function hideTicketConfirmModal() {
             document.getElementById('ticketConfirmModal').classList.add('hidden');
             document.getElementById('ticketConfirmButton').onclick = null;
+        }
+
+        function showVoidApproval(orderId) {
+            const modal = document.getElementById('voidApprovalModal');
+            const pinInput = document.getElementById('voidAdminPin');
+            const error = document.getElementById('voidApprovalError');
+            pinInput.value = '';
+            error.textContent = '';
+            error.classList.add('hidden');
+            document.getElementById('voidApprovalButton').onclick = () => voidTicket(orderId);
+            modal.classList.remove('hidden');
+            setTimeout(() => pinInput.focus(), 0);
+        }
+
+        function hideVoidApproval() {
+            document.getElementById('voidApprovalModal').classList.add('hidden');
+            document.getElementById('voidApprovalButton').onclick = null;
+        }
+
+        function voidTicket(orderId) {
+            const pinInput = document.getElementById('voidAdminPin');
+            const error = document.getElementById('voidApprovalError');
+            const button = document.getElementById('voidApprovalButton');
+            if (!pinInput.value.trim()) {
+                error.textContent = 'Enter the administrator PIN.';
+                error.classList.remove('hidden');
+                pinInput.focus();
+                return;
+            }
+
+            button.disabled = true;
+            button.textContent = 'Approving...';
+            fetch('api.php?action=void_ticket', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': '<?php echo csrfToken(); ?>',
+                },
+                body: JSON.stringify({ order_id: orderId, admin_pin: pinInput.value })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    window.location.reload();
+                    return;
+                }
+                error.textContent = data.error || 'Unable to void this ticket.';
+                error.classList.remove('hidden');
+                pinInput.value = '';
+                pinInput.focus();
+            })
+            .catch(() => {
+                error.textContent = 'Unable to contact the server. Please try again.';
+                error.classList.remove('hidden');
+            })
+            .finally(() => {
+                button.disabled = false;
+                button.textContent = 'Void Ticket';
+            });
         }
 
         function confirmStatusChange(orderId, status) {
@@ -590,7 +681,7 @@ $ticketStats = $stmt->fetch();
                         completeButton.classList.remove('hidden');
                         cancelButton.classList.remove('hidden');
                         completeButton.onclick = () => confirmStatusChange(Number(order.id), 'completed');
-                        cancelButton.onclick = () => confirmStatusChange(Number(order.id), 'cancelled');
+                        cancelButton.onclick = () => showVoidApproval(Number(order.id));
                     }
                 })
                 .catch(() => {
@@ -717,6 +808,7 @@ $ticketStats = $stmt->fetch();
             text.classList.add('hidden');
         });
         const navItems = document.querySelectorAll('#navigation a');
+        const profileLink = document.getElementById('sidebarProfileLink');
         navItems.forEach(item => {
             item.classList.add('justify-center');
             item.classList.remove('gap-4');
@@ -731,6 +823,10 @@ $ticketStats = $stmt->fetch();
         logoDivider.forEach(div => div.classList.add('hidden'));
         const userName = sidebar.querySelector('.text-sm.font-medium');
         if (userName) userName.classList.add('hidden');
+        if (profileLink) {
+            profileLink.classList.add('justify-center', 'p-0');
+            profileLink.classList.remove('gap-3', 'p-2');
+        }
 
         if (!isCollapsed) {
             sidebar.classList.remove('w-[80px]');
@@ -746,6 +842,10 @@ $ticketStats = $stmt->fetch();
             if (logoSince) logoSince.classList.remove('hidden');
             logoDivider.forEach(div => div.classList.remove('hidden'));
             if (userName) userName.classList.remove('hidden');
+            if (profileLink) {
+                profileLink.classList.remove('justify-center', 'p-0');
+                profileLink.classList.add('gap-3', 'p-2');
+            }
         }
 
         sidebarToggle.addEventListener('click', () => {
@@ -779,6 +879,10 @@ $ticketStats = $stmt->fetch();
                 
                 const userName = sidebar.querySelector('.text-sm.font-medium');
                 if (userName) userName.classList.add('hidden');
+                if (profileLink) {
+                    profileLink.classList.add('justify-center', 'p-0');
+                    profileLink.classList.remove('gap-3', 'p-2');
+                }
                 
             } else {
                 sidebar.classList.remove('w-[80px]');
@@ -807,6 +911,10 @@ $ticketStats = $stmt->fetch();
                 
                 const userName = sidebar.querySelector('.text-sm.font-medium');
                 if (userName) userName.classList.remove('hidden');
+                if (profileLink) {
+                    profileLink.classList.remove('justify-center', 'p-0');
+                    profileLink.classList.add('gap-3', 'p-2');
+                }
             }
         });
     </script>
