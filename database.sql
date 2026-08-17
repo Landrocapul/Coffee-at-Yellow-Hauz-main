@@ -62,6 +62,39 @@ CREATE TABLE IF NOT EXISTS tables (
     INDEX idx_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Customer accounts are deliberately separate from staff accounts and roles.
+CREATE TABLE IF NOT EXISTS customer_accounts (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    full_name VARCHAR(100) NOT NULL,
+    email VARCHAR(150) NOT NULL UNIQUE,
+    contact_number VARCHAR(30) NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    status ENUM('active', 'inactive') NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_customer_email (email)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Customer table reservations are separate from active POS orders.
+CREATE TABLE IF NOT EXISTS reservations (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    reservation_code VARCHAR(50) UNIQUE NOT NULL,
+    table_id INT NOT NULL,
+    customer_id INT NULL,
+    customer_name VARCHAR(100) NOT NULL,
+    contact_number VARCHAR(30) NOT NULL,
+    guest_count INT NOT NULL,
+    reservation_at DATETIME NOT NULL,
+    notes VARCHAR(500) NULL,
+    status ENUM('pending', 'confirmed', 'cancelled', 'completed') NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (table_id) REFERENCES tables(id) ON DELETE RESTRICT,
+    FOREIGN KEY (customer_id) REFERENCES customer_accounts(id) ON DELETE SET NULL,
+    UNIQUE KEY uq_reservation_table_time (table_id, reservation_at),
+    INDEX idx_reservation_at (reservation_at),
+    INDEX idx_reservation_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Orders Table
 CREATE TABLE IF NOT EXISTS orders (
     id INT AUTO_INCREMENT PRIMARY KEY,
