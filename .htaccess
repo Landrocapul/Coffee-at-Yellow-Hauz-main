@@ -4,7 +4,7 @@
     # Keep existing public URLs while serving the reorganized application.
     RewriteRule ^$ pages/index.php [L]
     RewriteRule ^index\.php$ pages/index.php [L]
-    RewriteRule ^customer/?$ customer/home.php [L]
+    RewriteRule ^customer/?$ customer/index.php [L]
     RewriteRule ^customer/order/?$ customer/index.php [L]
     RewriteRule ^customer/status\.php$ customer/status.php [L]
     RewriteRule ^customer/reservation/?$ customer/reservation.php [L]
